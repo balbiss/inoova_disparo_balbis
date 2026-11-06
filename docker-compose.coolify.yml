@@ -1,0 +1,76 @@
+# InoovaDisparo no Coolify (build pack "Docker Compose", build feito no próprio servidor).
+# Domínio: só o serviço "app" ganha domínio (porta 3020). AstraCalls, extrator e bancos ficam
+# SÓ na rede interna, sem porta pública (o extrator e o AstraCalls interno não têm por que sair).
+# Variáveis no Coolify: DB_PASSWORD, ASTRA_DB_PASSWORD, ASTRA_API_KEY, JWT_SECRET,
+#                       SUPERADMIN_EMAIL, SUPERADMIN_PASSWORD, PUBLIC_URL
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgres://disparo:${DB_PASSWORD}@postgres:5432/disparo
+      - JWT_SECRET=${JWT_SECRET}
+      - SUPERADMIN_EMAIL=${SUPERADMIN_EMAIL}
+      - SUPERADMIN_PASSWORD=${SUPERADMIN_PASSWORD}
+      - ASTRACALLS_URL=http://astracalls:8080
+      - ASTRACALLS_API_KEY=${ASTRA_API_KEY}
+      - PUBLIC_URL=${PUBLIC_URL}
+      - GMAPS_URL=http://gmaps:8080
+    volumes:
+      - uploads:/app/uploads
+    depends_on: [postgres, astracalls]
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=disparo
+      - POSTGRES_USER=disparo
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  # motor de WhatsApp (fork balbiss/AstraCalls, branch main = upstream develop)
+  astracalls:
+    build:
+      context: https://github.com/balbiss/AstraCalls.git#main
+    command: ["-addr", ":8080", "-static", "/app/client/dist"]
+    environment:
+      - WACALLS_PG_URL=postgres://astracalls:${ASTRA_DB_PASSWORD}@astra-pg:5432/postgres?sslmode=disable
+      - WACALLS_PG_NAMESPACE=wacalls
+      - WACALLS_API_KEY=${ASTRA_API_KEY}
+      - WACALLS_PUBLIC_IP=auto
+      - WACALLS_UDP_PORT=50000
+      - WACALLS_MAX_CALLS=8
+      - WACALLS_RECORDING_DIR=/data/recordings
+    volumes:
+      - astra_recordings:/data/recordings
+    depends_on: [astra-pg]
+    restart: unless-stopped
+
+  astra-pg:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=astracalls
+      - POSTGRES_PASSWORD=${ASTRA_DB_PASSWORD}
+      - POSTGRES_DB=postgres
+    volumes:
+      - astra_pg:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  # extrator de leads do Google Maps (gosom, open source) — sem senha, por isso só rede interna
+  gmaps:
+    image: gosom/google-maps-scraper:v1.18.1
+    command: ["-web", "-data-folder", "/gmapsdata", "-c", "2"]
+    volumes:
+      - gmapsdata:/gmapsdata
+    restart: unless-stopped
+
+volumes:
+  uploads:
+  pgdata:
+  astra_recordings:
+  astra_pg:
+  gmapsdata:
