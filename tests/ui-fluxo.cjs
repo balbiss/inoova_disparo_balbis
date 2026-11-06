@@ -63,14 +63,14 @@ async function semRolagemLateral(page, nome) {
   await shot('03-empresas');
 
   console.log('Admin da empresa');
-  await page.click('header button:has-text("Administrador")');
+  await page.click('aside button[aria-label="Minha conta"]');
   await page.click('text=Sair');
   await page.waitForURL('**/login');
   await page.fill('input[type=email]', emailAdmin);
   await page.fill('input[type=password]', 'senha123');
   await page.click('button[type=submit]');
   await page.waitForURL('**/painel');
-  await page.waitForSelector('text=Números conectados');
+  await page.waitForSelector('text=Atividade dos últimos 7 dias');
   check(await page.isVisible('text=ainda não conectou'), 'painel avisa que não tem número conectado');
   await shot('04-painel-vazio');
 
@@ -187,7 +187,7 @@ async function semRolagemLateral(page, nome) {
   }
   await page.goto(BASE + '/painel');
   await page.waitForSelector('nav >> text=Conversas');
-  await page.waitForFunction(() => [...document.querySelectorAll('nav a')].some(a => a.textContent.includes('Conversas') && /\d/.test(a.textContent)), null, { timeout: 15000 }).then(() => check(true, 'menu mostra contador de não lidas')).catch(() => check(false, 'menu mostra contador de não lidas'));
+  await page.waitForFunction(() => [...document.querySelectorAll('nav button')].some(a => a.textContent.includes('Conversas') && /\d/.test(a.textContent)), null, { timeout: 15000 }).then(() => check(true, 'menu mostra contador de não lidas')).catch(() => check(false, 'menu mostra contador de não lidas'));
   await page.click('nav >> text=Conversas');
   await page.waitForSelector('text=Maria Silva');
   await shot('14-conversas-lista');
@@ -234,7 +234,7 @@ async function semRolagemLateral(page, nome) {
   await shot('13-equipe');
 
   console.log('Superadmin: Segurança');
-  await page.click('header button:has-text("Administrador")');
+  await page.click('aside button[aria-label="Minha conta"]');
   await page.click('text=Sair');
   await page.waitForURL('**/login');
   await page.fill('input[type=email]', 'admin@teste.local');

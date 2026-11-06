@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { Building2, ChevronDown, KeyRound, LayoutDashboard, LogOut, Megaphone, Menu, MessageCircle, PanelLeft, ShieldCheck, Smartphone, Users, UsersRound, X } from 'lucide-react';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Building2, ChevronUp, KeyRound, LayoutDashboard, LogOut, Megaphone, Menu, MessageCircle, PanelLeft, ShieldCheck, Smartphone, Users, UsersRound, X } from 'lucide-react';
 import { api, erro, getUsuario, ok, sair, salvarSessao, getToken, type Usuario } from '../lib/api';
 import { Logo, LogoMarca } from './Logo';
 import { Campo, Modal, btn, inputStyle } from './ui';
@@ -24,26 +24,70 @@ function menuDe(u: Usuario | null, naoLidas: number): Item[] {
   return l;
 }
 
+const papel = (u: Usuario | null) => (u?.role === 'superadmin' ? 'Administrador do sistema' : u?.role === 'admin' ? 'Administrador' : 'Usuário');
+
+/** Perfil no rodapé do menu lateral: foto (iniciais), nome, cargo; menu abre pra cima. */
+function PerfilLateral({ usuario, compacto, onSenha }: { usuario: Usuario | null; compacto: boolean; onSenha: () => void }) {
+  const [aberto, setAberto] = useState(false);
+  return (
+    <div style={{ position: 'relative', padding: 10, borderTop: '1px solid rgba(255,255,255,.1)' }}>
+      <button onClick={() => setAberto(a => !a)} title={compacto ? usuario?.name : undefined} aria-label="Minha conta"
+        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: compacto ? '6px 0' : '8px 10px', justifyContent: compacto ? 'center' : 'flex-start', border: 'none', borderRadius: 10, background: aberto ? 'rgba(255,255,255,.14)' : 'rgba(255,255,255,.06)', color: '#fff', textAlign: 'left' }}>
+        <span style={{ width: 36, height: 36, borderRadius: 99, background: '#25D366', color: '#073B33', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, flex: 'none' }}>{iniciais(usuario?.name || '')}</span>
+        {!compacto && (
+          <>
+            <span style={{ flex: 1, minWidth: 0, lineHeight: 1.25 }}>
+              <span style={{ display: 'block', fontSize: 14, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{usuario?.name}</span>
+              <span style={{ display: 'block', fontSize: 12, color: 'var(--side-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{papel(usuario)}</span>
+            </span>
+            <ChevronUp size={16} color="var(--side-muted)" style={{ transform: aberto ? 'none' : 'rotate(180deg)', transition: 'transform .15s' }} />
+          </>
+        )}
+      </button>
+      {aberto && (
+        <>
+          <div onClick={() => setAberto(false)} style={{ position: 'fixed', inset: 0, zIndex: 39 }} />
+          <div style={{ position: 'absolute', left: 10, bottom: 'calc(100% - 4px)', zIndex: 40, width: compacto ? 230 : 'calc(100% - 20px)', minWidth: 210, background: 'var(--card)', color: 'var(--ink)', border: '1px solid var(--line)', borderRadius: 10, padding: 6, boxShadow: '0 -12px 28px rgba(11,20,26,.18)', animation: 'fadeUp .12s ease' }}>
+            <div style={{ padding: '8px 10px 10px', borderBottom: '1px solid var(--line)', marginBottom: 4 }}>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>{usuario?.name}</div>
+              <div style={{ fontSize: 12.5, color: 'var(--muted)', overflowWrap: 'anywhere' }}>{usuario?.email}</div>
+            </div>
+            <button onClick={() => { setAberto(false); onSenha() }} style={itemMenu}><KeyRound size={16} /> Trocar minha senha</button>
+            <button onClick={sair} style={{ ...itemMenu, color: 'var(--perigo)' }}><LogOut size={16} /> Sair</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 const iniciais = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map(p => p[0]).join('').toUpperCase() || '?';
 
+// itens do menu são BOTÕES (não links): o navegador não mostra o endereço no canto ao passar o mouse
 function Navegacao({ itens, compacto, onClick }: { itens: Item[]; compacto: boolean; onClick?: () => void }) {
+  const nav = useNavigate();
+  const { pathname } = useLocation();
   return (
     <nav style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '8px 10px' }}>
-      {itens.map(i => (
-        <NavLink key={i.to} to={i.to} onClick={onClick} title={compacto ? i.label : undefined}
-          style={({ isActive }) => ({
-            display: 'flex', alignItems: 'center', gap: 12, padding: compacto ? '11px 0' : '10px 12px', justifyContent: compacto ? 'center' : 'flex-start',
-            borderRadius: 6, color: isActive ? '#fff' : 'var(--side-ink)', background: isActive ? 'var(--side-active)' : 'transparent',
-            fontSize: 14.5, fontWeight: isActive ? 700 : 400, textDecoration: 'none', position: 'relative',
-            boxShadow: isActive ? 'inset 3px 0 0 #25D366' : undefined,
-          })}>
-          {i.icon}
-          {!compacto && <span style={{ flex: 1 }}>{i.label}</span>}
-          {!!i.badge && (
-            <span style={{ position: compacto ? 'absolute' : 'static', top: 4, right: 10, minWidth: 20, height: 20, padding: '0 6px', borderRadius: 99, background: '#25D366', color: '#073B33', fontSize: 11.5, fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{i.badge > 99 ? '99+' : i.badge}</span>
-          )}
-        </NavLink>
-      ))}
+      {itens.map(i => {
+        const ativo = pathname === i.to || pathname.startsWith(i.to + '/');
+        return (
+          <button key={i.to} type="button" onClick={() => { nav(i.to); onClick?.() }} title={compacto ? i.label : undefined} aria-current={ativo ? 'page' : undefined}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 12, padding: compacto ? '11px 0' : '10px 12px', justifyContent: compacto ? 'center' : 'flex-start',
+              border: 'none', width: '100%', textAlign: 'left', cursor: 'pointer',
+              borderRadius: 6, color: ativo ? '#fff' : 'var(--side-ink)', background: ativo ? 'var(--side-active)' : 'transparent',
+              fontSize: 14.5, fontWeight: ativo ? 700 : 400, position: 'relative',
+              boxShadow: ativo ? 'inset 3px 0 0 #25D366' : undefined,
+            }}>
+            {i.icon}
+            {!compacto && <span style={{ flex: 1 }}>{i.label}</span>}
+            {!!i.badge && (
+              <span style={{ position: compacto ? 'absolute' : 'static', top: 4, right: 10, minWidth: 20, height: 20, padding: '0 6px', borderRadius: 99, background: '#25D366', color: '#073B33', fontSize: 11.5, fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{i.badge > 99 ? '99+' : i.badge}</span>
+            )}
+          </button>
+        );
+      })}
     </nav>
   );
 }
@@ -52,7 +96,6 @@ export function AppShell() {
   const [usuario, setUsuario] = useState<Usuario | null>(getUsuario());
   const [aberto, setAberto] = useState(() => localStorage.getItem('menu_compacto') !== '1');
   const [mobile, setMobile] = useState(false);
-  const [perfil, setPerfil] = useState(false);
   const [senha, setSenha] = useState(false);
   const loc = useLocation();
   const [naoLidas, setNaoLidas] = useState(0);
@@ -71,7 +114,7 @@ export function AppShell() {
   useEffect(() => {
     api<{ user: Usuario }>('GET', '/auth/me').then(r => { setUsuario(r.user); salvarSessao(getToken()!, r.user) }).catch(() => {});
   }, []);
-  useEffect(() => { setMobile(false); setPerfil(false) }, [loc.pathname]);
+  useEffect(() => { setMobile(false) }, [loc.pathname]);
 
   const alternar = () => setAberto(a => { localStorage.setItem('menu_compacto', a ? '1' : '0'); return !a });
   const largura = aberto ? 224 : 68;
@@ -79,18 +122,16 @@ export function AppShell() {
   return (
     <div style={{ minHeight: '100%' }}>
       <aside className="app-sidebar" style={{ position: 'fixed', top: 0, bottom: 0, left: 0, width: largura, background: 'var(--side)', color: 'var(--side-ink)', display: 'flex', flexDirection: 'column', zIndex: 30, transition: 'width .15s' }}>
-        <div style={{ height: 60, display: 'flex', alignItems: 'center', justifyContent: aberto ? 'flex-start' : 'center', padding: aberto ? '0 18px' : 0, borderBottom: '1px solid rgba(255,255,255,.1)' }}>
-          {aberto ? <Logo largura={176} /> : <LogoMarca size={32} />}
+        <div style={{ height: 64, display: 'flex', alignItems: 'center', justifyContent: aberto ? 'space-between' : 'center', padding: aberto ? '0 10px 0 18px' : 0, borderBottom: '1px solid rgba(255,255,255,.1)' }}>
+          {aberto ? <Logo largura={160} /> : <button onClick={alternar} title="Abrir menu" style={{ border: 'none', background: 'none', padding: 0, display: 'flex' }}><LogoMarca size={34} /></button>}
+          {aberto && <button onClick={alternar} title="Recolher menu" aria-label="Recolher menu" style={{ width: 30, height: 30, border: 'none', borderRadius: 8, background: 'rgba(255,255,255,.08)', color: 'var(--side-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}><PanelLeft size={16} /></button>}
         </div>
         {usuario?.empresa && aberto && (
           <div style={{ padding: '14px 20px 4px', fontSize: 10, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--side-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{usuario.empresa.name}</div>
         )}
         <Navegacao itens={itens} compacto={!aberto} />
         <div style={{ flex: 1 }} />
-        <button onClick={alternar} title={aberto ? 'Recolher menu' : 'Abrir menu'}
-          style={{ margin: 10, height: 36, border: 'none', borderRadius: 6, background: 'rgba(255,255,255,.08)', color: 'var(--side-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 13 }}>
-          <PanelLeft size={17} /> {aberto && 'Recolher'}
-        </button>
+        <PerfilLateral usuario={usuario} compacto={!aberto} onSenha={() => setSenha(true)} />
       </aside>
 
       {mobile && (
@@ -102,35 +143,18 @@ export function AppShell() {
             </div>
             {usuario?.empresa && <div style={{ padding: '14px 20px 4px', fontSize: 10, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--side-muted)' }}>{usuario.empresa.name}</div>}
             <Navegacao itens={itens} compacto={false} onClick={() => setMobile(false)} />
+            <div style={{ flex: 1 }} />
+            <PerfilLateral usuario={usuario} compacto={false} onSenha={() => { setMobile(false); setSenha(true) }} />
           </aside>
         </div>
       )}
 
       <div className="content-col" style={{ marginLeft: largura, transition: 'margin-left .15s', minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
-        <header style={{ height: 60, background: 'var(--card)', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 12, padding: '0 20px', position: 'sticky', top: 0, zIndex: 20 }}>
-          <button className="so-mobile" onClick={() => setMobile(true)} aria-label="Abrir menu" style={{ border: '1px solid var(--line)', background: 'var(--card)', borderRadius: 6, width: 36, height: 36, alignItems: 'center', justifyContent: 'center' }}><Menu size={19} /></button>
-          <span className="so-mobile"><LogoMarca size={28} /></span>
+        <header className="topo-mobile" style={{ height: 60, background: 'var(--card)', borderBottom: '1px solid var(--line)', alignItems: 'center', gap: 12, padding: '0 14px', position: 'sticky', top: 0, zIndex: 20 }}>
+          <button onClick={() => setMobile(true)} aria-label="Abrir menu" style={{ border: '1px solid var(--line)', background: 'var(--card)', borderRadius: 8, width: 38, height: 38, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Menu size={19} /></button>
+          <Logo variante="escura" largura={140} />
           <div style={{ flex: 1 }} />
-          <div style={{ position: 'relative' }}>
-            <button onClick={() => setPerfil(p => !p)} style={{ display: 'flex', alignItems: 'center', gap: 10, border: 'none', background: 'none', padding: '4px 6px', borderRadius: 6 }}>
-              <span style={{ width: 34, height: 34, borderRadius: 99, background: 'var(--teal)', color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700 }}>{iniciais(usuario?.name || '')}</span>
-              <span className="esconde-mobile" style={{ textAlign: 'left', lineHeight: 1.2 }}>
-                <span style={{ display: 'block', fontSize: 14, fontWeight: 700 }}>{usuario?.name}</span>
-                <span style={{ display: 'block', fontSize: 12, color: 'var(--muted)' }}>{usuario?.role === 'superadmin' ? 'Administrador do sistema' : usuario?.role === 'admin' ? 'Administrador' : 'Usuário'}</span>
-              </span>
-              <ChevronDown size={16} color="var(--muted)" />
-            </button>
-            {perfil && (
-              <>
-                <div onClick={() => setPerfil(false)} style={{ position: 'fixed', inset: 0, zIndex: 39 }} />
-                <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 40, minWidth: 220, background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 6, padding: 6, boxShadow: '0 12px 28px rgba(11,20,26,.14)', animation: 'fadeUp .12s ease' }}>
-                  <div style={{ padding: '8px 10px 10px', borderBottom: '1px solid var(--line)', marginBottom: 4, fontSize: 13, color: 'var(--muted)', overflowWrap: 'anywhere' }}>{usuario?.email}</div>
-                  <button onClick={() => { setPerfil(false); setSenha(true) }} style={itemMenu}><KeyRound size={16} /> Trocar minha senha</button>
-                  <button onClick={sair} style={{ ...itemMenu, color: 'var(--perigo)' }}><LogOut size={16} /> Sair</button>
-                </div>
-              </>
-            )}
-          </div>
+          <button onClick={() => setMobile(true)} aria-label="Minha conta" style={{ width: 34, height: 34, borderRadius: 99, border: 'none', background: 'var(--teal)', color: '#fff', fontSize: 13, fontWeight: 700 }}>{iniciais(usuario?.name || '')}</button>
         </header>
         <main className={'app-main' + (loc.pathname.startsWith('/conversas') ? ' app-main-chat' : '')} style={{ padding: loc.pathname.startsWith('/conversas') ? '16px 20px 12px' : '22px 26px 48px', flex: 1, width: '100%', maxWidth: loc.pathname.startsWith('/conversas') ? 'none' : 1400 }}>
           <Outlet />

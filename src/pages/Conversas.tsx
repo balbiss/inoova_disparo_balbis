@@ -100,7 +100,7 @@ export default function Conversas() {
   );
 
   return (
-    <div className={'conversas' + (aberta ? ' com-chat' : '')} style={{ display: 'grid', gridTemplateColumns: '340px minmax(0, 1fr)', gridTemplateRows: 'minmax(0, 1fr)', height: 'calc(100dvh - 60px - 28px)', minHeight: 420, background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 4, overflow: 'hidden' }}>
+    <div className={'conversas' + (aberta ? ' com-chat' : '')} style={{ display: 'grid', gridTemplateColumns: '340px minmax(0, 1fr)', gridTemplateRows: 'minmax(0, 1fr)', height: 'calc(100dvh - 28px)', minHeight: 420, background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 4, overflow: 'hidden' }}>
       <aside className="conv-lista" style={{ borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, height: '100%' }}>
         <div style={{ padding: '14px 14px 10px', borderBottom: '1px solid var(--line)' }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 10 }}>
