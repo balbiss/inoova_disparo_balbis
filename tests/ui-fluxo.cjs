@@ -173,7 +173,7 @@ async function semRolagemLateral(page, nome) {
   await shot('14-conversas-lista');
   await page.click('aside button:has-text("Maria Silva")');
   await page.waitForSelector('text=Tenho interesse! Qual o preço?');
-  check(await page.isVisible('text=Oi Maria!'), 'chat mostra a mensagem da campanha e a resposta');
+  check(await page.locator('section div:text-is("Oi Maria!")').count() > 0, 'chat mostra a mensagem da campanha e a resposta');
   await page.fill('textarea[placeholder="Digite uma mensagem"]', 'Oi Maria, já te passo!');
   await page.keyboard.press('Enter');
   check(await page.waitForSelector('.swal2-toast:has-text("desconectado")', { timeout: 8000 }).then(() => true).catch(() => false), 'responder com número desconectado avisa');
