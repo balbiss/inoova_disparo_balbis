@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { db } from '../db/client.js';
 import { campaigns, connections, contacts, tenants, users } from '../db/schema.js';
 import { exigirLogin, exigirSuperadmin } from '../lib/auth.js';
+import { lerAdmin, PADRAO_ADMIN, salvarAdmin } from '../lib/seguranca.js';
 
 // Área do dono do SaaS: cria as empresas e o administrador de cada uma (não tem cadastro aberto).
 export const adminRouter = Router();
@@ -75,4 +76,30 @@ adminRouter.post('/tenants/:id/reset-password', async (req, res) => {
   if (!u) return res.status(404).json({ error: 'Essa empresa não tem administrador.' });
   await db.update(users).set({ passwordHash: await bcrypt.hash(p.data.password, 10), active: true }).where(eq(users.id, u.id));
   res.json({ ok: true, email: u.email });
+});
+
+// --- segurança anti-bloqueio (padrões e limites que valem pra todas as empresas) ----------------
+adminRouter.get('/seguranca', async (_req, res) => {
+  res.json({ seguranca: await lerAdmin(), padrao: PADRAO_ADMIN });
+});
+
+adminRouter.put('/seguranca', async (req, res) => {
+  const n = (min: number, max: number) => z.coerce.number().int().min(min).max(max);
+  const p = z.object({
+    intervaloMin: n(1, 3600), intervaloMax: n(1, 3600), pisoIntervaloMsg: n(1, 600), pisoIntervaloLigacao: n(5, 600),
+    ligIntervaloMin: n(5, 3600), ligIntervaloMax: n(5, 3600),
+    pausaCadaMin: n(3, 500), pausaCadaMax: n(3, 500), pausaMin: n(1, 240), pausaMax: n(1, 240),
+    limiteHora: n(1, 1000), limiteDia: n(1, 10000), ligLimiteHora: n(1, 1000), ligLimiteDia: n(1, 10000), tetoDia: n(1, 10000),
+    aquecimento: z.boolean(), aquecimentoDia1: n(1, 1000), aquecimentoIncremento: n(0, 1000),
+    horarioInicio: z.string().regex(/^\d{2}:\d{2}$/), horarioFim: z.string().regex(/^\d{2}:\d{2}$/), diasSemana: z.array(z.number().int().min(0).max(6)).min(1),
+    verificarWhatsapp: z.boolean(), pularEmConversa: z.boolean(),
+    toqueMin: n(15, 60), toqueMax: n(15, 60), falhasSeguidas: n(0, 50), pausaFalhasMin: n(1, 1440),
+  }).partial().safeParse(req.body);
+  if (!p.success) return res.status(400).json({ error: 'Valor inválido em ' + p.error.issues[0].path.join('.') });
+  const v = p.data;
+  const atual = await lerAdmin();
+  const final = { ...atual, ...v };
+  if (final.intervaloMax < final.intervaloMin || final.ligIntervaloMax < final.ligIntervaloMin) return res.status(400).json({ error: 'O intervalo máximo precisa ser maior ou igual ao mínimo.' });
+  if (final.pausaCadaMax < final.pausaCadaMin || final.pausaMax < final.pausaMin || final.toqueMax < final.toqueMin) return res.status(400).json({ error: 'Em cada faixa, o máximo precisa ser maior ou igual ao mínimo.' });
+  res.json({ seguranca: await salvarAdmin(v) });
 });

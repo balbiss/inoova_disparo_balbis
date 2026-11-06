@@ -15,6 +15,13 @@
       "when": 1793929362074,
       "tag": "0001_conversas_botoes",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793930273651,
+      "tag": "0002_seguranca",
+      "breakpoints": true
     }
   ]
 }

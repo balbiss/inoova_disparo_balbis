@@ -32,7 +32,7 @@ export default function Login() {
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'row-reverse' }}>
       <aside className="login-painel" style={{ width: 380, flex: 'none', background: 'var(--teal)', color: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 38px', position: 'relative' }}>
-        <div style={{ marginBottom: 40 }}><Logo size={42} fonte={24} /></div>
+        <div style={{ marginBottom: 40, width: 260 }}><Logo largura={260} /></div>
         <form onSubmit={entrar} style={{ width: '100%' }}>
           <label style={field}><UserIcon /><input value={email} onChange={e => setEmail(e.target.value)} type="email" required placeholder="E-mail" autoComplete="username" style={inputCss} /></label>
           <label style={field}><LockIcon /><input value={senha} onChange={e => setSenha(e.target.value)} type="password" required placeholder="Senha" autoComplete="current-password" style={inputCss} /></label>
@@ -44,7 +44,7 @@ export default function Login() {
         <span style={{ position: 'absolute', bottom: 26, fontSize: 12, letterSpacing: '.18em', textTransform: 'uppercase', color: 'rgba(255,255,255,.55)' }}>Disparos pelo WhatsApp</span>
       </aside>
       <main className="login-marca" style={{ flex: 1, minWidth: 0, background: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 40, textAlign: 'center', backgroundImage: 'radial-gradient(circle at 70% 30%, #E7F8F1 0, transparent 55%)' }}>
-        <Logo cor="#111B21" size={84} fonte={44} />
+        <div style={{ width: "min(520px, 85%)" }}><Logo variante="escura" largura={520} /></div>
         <p style={{ margin: '26px 0 0', fontSize: 19, color: 'var(--muted)', maxWidth: 520, lineHeight: 1.5 }}>Campanhas de mensagem e de ligação pelo WhatsApp, com relatório de cada contato.</p>
       </main>
     </div>

@@ -10,6 +10,7 @@ import { campaigns, campaignTargets, connections, contacts, conversations, messa
 import { exigirEmpresa, exigirLogin, tenantDe } from '../lib/auth.js';
 import { arquivoUpload, UPLOAD_DIR } from '../lib/uploads.js';
 import { estadoDe } from '../lib/astra.js';
+import { efetiva, limitesNumero, padraoCampanha, type Seguranca } from '../lib/seguranca.js';
 
 export const campaignsRouter = Router();
 campaignsRouter.use(exigirLogin, exigirEmpresa);
@@ -38,7 +39,7 @@ campaignsRouter.post('/upload', (req, res) => {
 // --- contadores ---------------------------------------------------------------------------------
 const CONTADORES = {
   total: sql<number>`count(*)::int`,
-  pending: sql<number>`count(*) filter (where ${campaignTargets.status} in ('pending','sending','ringing','answered'))::int`,
+  pending: sql<number>`count(*) filter (where ${campaignTargets.status} in ('pending','sending','warming','ringing','answered'))::int`,
   sent: sql<number>`count(*) filter (where ${campaignTargets.status} = 'sent')::int`,
   failed: sql<number>`count(*) filter (where ${campaignTargets.status} = 'failed')::int`,
   skipped: sql<number>`count(*) filter (where ${campaignTargets.status} = 'skipped')::int`,
@@ -80,12 +81,23 @@ const publica = (c: typeof campaigns.$inferSelect) => {
   return { ...resto, hasMedia: !!mediaPath };
 };
 
+campaignsRouter.get('/seguranca-padrao', async (req, res) => {
+  res.json({ seguranca: await padraoCampanha(req.query.kind === 'call' ? 'call' : 'message') });
+});
+
 campaignsRouter.get('/:id', async (req, res) => {
   const c = await daEmpresa(req);
   if (!c) return res.status(404).json({ error: 'Campanha não encontrada.' });
   const [conn] = c.connectionId ? await db.select().from(connections).where(eq(connections.id, c.connectionId)) : [];
   const cont = await contadores([c.id]);
-  res.json({ campaign: { ...publica(c), connectionName: conn?.name ?? null, stats: cont.get(c.id) || vazio } });
+  // estado do número (próximo envio, pausa de segurança, limites de hoje)
+  let numero = null;
+  if (conn) {
+    const cfg = await efetiva(c.kind as 'message' | 'call', c.seguranca as Partial<Seguranca>);
+    const l = await limitesNumero(conn, cfg);
+    numero = { nextAt: conn.nextAt, pausedUntil: conn.pausedUntil && conn.pausedUntil > new Date() ? conn.pausedUntil : null, pauseReason: conn.pauseReason, ...l };
+  }
+  res.json({ campaign: { ...publica(c), connectionName: conn?.name ?? null, stats: cont.get(c.id) || vazio, numero } });
 });
 
 campaignsRouter.get('/:id/targets', async (req, res) => {
@@ -95,7 +107,7 @@ campaignsRouter.get('/:id/targets', async (req, res) => {
   const per = Math.min(200, Math.max(10, Number(req.query.per) || 50));
   const conds: SQL[] = [eq(campaignTargets.campaignId, c.id)];
   const st = String(req.query.status || '');
-  if (st === 'pending') conds.push(inArray(campaignTargets.status, ['pending', 'sending', 'ringing', 'answered']));
+  if (st === 'pending') conds.push(inArray(campaignTargets.status, ['pending', 'sending', 'warming', 'ringing', 'answered']));
   else if (st === 'replied') conds.push(isNotNull(campaignTargets.repliedAt));
   else if (st === 'read') conds.push(isNotNull(campaignTargets.readAt));
   else if (st === 'optedOut') conds.push(eq(campaignTargets.optedOut, true));
@@ -137,8 +149,10 @@ const criarSchema = z.object({
   media: z.object({ path: z.string(), name: z.string(), mime: z.string() }).nullable().optional(),
   callVideo: z.boolean().default(false),
   maxRingSeconds: z.number().int().min(15).max(90).default(40),
-  minDelay: z.number().int().min(5, 'O intervalo mínimo é de 5 segundos.').max(3600),
-  maxDelay: z.number().int().min(5).max(3600),
+  // compatibilidade: intervalo também pode vir solto; o resto da segurança vem em `seguranca`
+  minDelay: z.number().int().min(1).max(3600).optional(),
+  maxDelay: z.number().int().min(1).max(3600).optional(),
+  seguranca: z.record(z.unknown()).default({}),
   audience: z.object({
     all: z.boolean().optional(),
     categoryIds: z.array(z.number().int()).optional(),
@@ -152,7 +166,9 @@ campaignsRouter.post('/', async (req, res) => {
   if (!p.success) return res.status(400).json({ error: p.error.issues[0].message });
   const d = p.data;
   const tid = tenantDe(req);
-  if (d.maxDelay < d.minDelay) return res.status(400).json({ error: 'O intervalo máximo precisa ser maior ou igual ao mínimo.' });
+  // segurança anti-bloqueio: o pedido é ajustado ao piso/teto do admin (o cliente não fura)
+  const seg = await efetiva(d.kind, { ...(d.minDelay ? { intervaloMin: d.minDelay } : {}), ...(d.maxDelay ? { intervaloMax: d.maxDelay } : {}), ...d.seguranca } as Partial<Seguranca>);
+  if (d.kind === 'call' && seg.preMsgAtivo === false && (d.seguranca as any)?.preMsgAtivo && !seg.preMsgs.length) return res.status(400).json({ error: 'Escreva a mensagem que vai antes da ligação.' });
 
   const [conn] = await db.select().from(connections).where(and(eq(connections.id, d.connectionId), eq(connections.tenantId, tid)));
   if (!conn) return res.status(400).json({ error: 'Escolha um número de WhatsApp.' });
@@ -162,7 +178,6 @@ campaignsRouter.post('/', async (req, res) => {
     if (!d.media) return res.status(400).json({ error: d.callVideo ? 'Envie o vídeo que vai passar na ligação.' : 'Envie o áudio que vai tocar na ligação.' });
     const ok = d.callVideo ? d.media.mime.startsWith('video/') : (d.media.mime.startsWith('audio/') || d.media.mime.startsWith('video/'));
     if (!ok) return res.status(400).json({ error: d.callVideo ? 'Pra ligação de vídeo, envie um arquivo de vídeo (MP4).' : 'Pra ligação de áudio, envie um arquivo de áudio (MP3, OGG, WAV…).' });
-    if (d.minDelay < 10) return res.status(400).json({ error: 'Em ligações, o intervalo mínimo é de 10 segundos.' });
     messageType = d.callVideo ? 'video' : 'audio';
   } else if (messageType === 'text') {
     if (!d.text.trim()) return res.status(400).json({ error: 'Escreva a mensagem.' });
@@ -203,7 +218,7 @@ campaignsRouter.post('/', async (req, res) => {
       buttons: messageType === 'text' && d.kind === 'message' ? d.buttons : [], optOutButton: messageType === 'text' && d.kind === 'message' && d.optOutButton,
       footer: d.footer, pollOptions: messageType === 'poll' ? d.pollOptions : [], pollMulti: d.pollMulti, typing: d.typing,
       mediaPath: d.media?.path ?? null, mediaName: d.media?.name ?? null, mediaMime: d.media?.mime ?? null,
-      callVideo: d.kind === 'call' && d.callVideo, maxRingSeconds: d.maxRingSeconds, minDelay: d.minDelay, maxDelay: d.maxDelay,
+      callVideo: d.kind === 'call' && d.callVideo, maxRingSeconds: seg.toqueMax, minDelay: seg.intervaloMin, maxDelay: seg.intervaloMax, seguranca: seg,
       startedAt: d.start ? new Date() : null,
     }).returning();
     for (let i = 0; i < publico.length; i += 1000) {

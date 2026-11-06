@@ -6,6 +6,7 @@ import { campaigns, connections, tenants } from '../db/schema.js';
 import { exigirEmpresa, exigirLogin, tenantDe } from '../lib/auth.js';
 import { astra, AstraErro, clientIdDe, estadoDe, numeroDoJid } from '../lib/astra.js';
 import { atualizarSaude, garantirWebhook } from '../lib/saude.js';
+import { efetiva, limitesNumero } from '../lib/seguranca.js';
 
 // Números de WhatsApp da empresa (cada um = uma sessão no AstraCalls).
 export const connectionsRouter = Router();
@@ -26,11 +27,23 @@ async function comEstado(c: typeof connections.$inferSelect) {
   const phone = numeroDoJid(st?.jid) || c.phone;
   if (st?.paired && phone && phone !== c.phone) await db.update(connections).set({ phone }).where(eq(connections.id, c.id));
   const restricao = c.restrictionActive && (!c.restrictionEndsAt || c.restrictionEndsAt > new Date());
+  // uso de hoje com os limites padrão de mensagem (cada campanha pode ter os seus)
+  const uso = await limitesNumero(c, await efetiva('message', {}));
+  const pausado = c.pausedUntil && c.pausedUntil > new Date();
   return {
     id: c.id, name: c.name, phone, connected: !!st?.paired, state: st?.state || 'desconhecido', createdAt: c.createdAt,
     health: { restriction: restricao, restrictionEndsAt: restricao ? c.restrictionEndsAt : null, capping: c.cappingStatus, cappingRemaining: c.cappingRemaining, cappingTotal: c.cappingTotal, at: c.healthAt },
+    seguranca: { pausedUntil: pausado ? c.pausedUntil : null, pauseReason: pausado ? c.pauseReason : null, nextAt: c.nextAt, ...uso },
   };
 }
+
+// recomeça o aquecimento (ex.: número trocado de chip ou que voltou de bloqueio)
+connectionsRouter.post('/:id/reset-warmup', async (req, res) => {
+  const c = await daEmpresa(req);
+  if (!c) return res.status(404).json({ error: 'Número não encontrado.' });
+  await db.update(connections).set({ warmupSince: new Date() }).where(eq(connections.id, c.id));
+  res.json({ ok: true });
+});
 
 // consulta a saúde do número agora (restrição e limite de conversas novas)
 connectionsRouter.post('/:id/health', async (req, res) => {

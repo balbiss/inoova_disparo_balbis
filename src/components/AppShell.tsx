@@ -63,7 +63,7 @@ export function AppShell() {
     <div style={{ minHeight: '100%' }}>
       <aside className="app-sidebar" style={{ position: 'fixed', top: 0, bottom: 0, left: 0, width: largura, background: 'var(--side)', color: 'var(--side-ink)', display: 'flex', flexDirection: 'column', zIndex: 30, transition: 'width .15s' }}>
         <div style={{ height: 60, display: 'flex', alignItems: 'center', justifyContent: aberto ? 'flex-start' : 'center', padding: aberto ? '0 18px' : 0, borderBottom: '1px solid rgba(255,255,255,.1)' }}>
-          {aberto ? <Logo size={30} fonte={17} /> : <LogoMarca size={30} />}
+          {aberto ? <Logo largura={176} /> : <LogoMarca size={32} />}
         </div>
         {usuario?.empresa && aberto && (
           <div style={{ padding: '14px 20px 4px', fontSize: 10, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--side-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{usuario.empresa.name}</div>
@@ -80,7 +80,7 @@ export function AppShell() {
         <div onClick={() => setMobile(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(11,20,26,.45)', zIndex: 60 }}>
           <aside onClick={e => e.stopPropagation()} style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: 260, background: 'var(--side)', animation: 'slideIn .18s ease', display: 'flex', flexDirection: 'column' }}>
             <div style={{ height: 60, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 14px 0 18px', borderBottom: '1px solid rgba(255,255,255,.1)' }}>
-              <Logo size={28} fonte={16} />
+              <Logo largura={170} />
               <button onClick={() => setMobile(false)} aria-label="Fechar menu" style={{ border: 'none', background: 'none', color: '#fff', padding: 6 }}><X size={20} /></button>
             </div>
             {usuario?.empresa && <div style={{ padding: '14px 20px 4px', fontSize: 10, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--side-muted)' }}>{usuario.empresa.name}</div>}

@@ -106,7 +106,9 @@ await webhook('message_capping', { capping: { capping_status: 'CAPPED', remainin
 let cx = (await call(A, 'GET', '/connections')).j.connections[0];
 check(cx.health.capping === 'CAPPED' && cx.health.cappingRemaining === 0, 'limite de conversas novas aparece na conexão', cx.health);
 camp = (await call(A, 'GET', `/campaigns/${depois.id}`)).j.campaign;
-check(camp.status === 'paused' && /limite/.test(camp.pauseReason), 'campanha rodando pausa quando o limite estoura', camp);
+await espera(3500);
+camp = (await call(A, 'GET', `/campaigns/${depois.id}`)).j.campaign;
+check(camp.status === 'running' && !!camp.waitReason, 'campanha NÃO pausa: fica enviando e mostra o motivo da espera (número parado)', camp);
 await webhook('restriction', { active: true, ends_at: Date.now() + 3600_000 });
 cx = (await call(A, 'GET', '/connections')).j.connections[0];
 check(cx.health.restriction === true && !!cx.health.restrictionEndsAt, 'restrição do WhatsApp aparece na conexão', cx.health);

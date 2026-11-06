@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { campaigns, connections } from '../db/schema.js';
+import { connections } from '../db/schema.js';
 import { astra, estadoDe } from './astra.js';
 import { receberMensagem } from './conversas.js';
 
@@ -37,20 +37,13 @@ export function assinaturaValida(segredo: string | null, corpo: Buffer, assinatu
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-/** Pausa as campanhas rodando nesse número (restrição / limite estourado). */
-export async function pausarCampanhasDo(connId: number, motivo: string) {
-  await db.update(campaigns).set({ status: 'paused', pauseReason: motivo }).where(and(eq(campaigns.connectionId, connId), eq(campaigns.status, 'running')));
-}
-
-const fmt = (d: Date) => d.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+// Restrição e limite do WhatsApp param o NÚMERO (o motor não envia por ele e mostra o motivo nas
+// campanhas); quando passam, as campanhas continuam sozinhas — igual ao InoovaCall.
 
 export async function aplicarRestricao(conn: Conexao, r: { active?: boolean; ends_at?: number }) {
   const ativa = !!r?.active;
-  const fim = r?.ends_at ? new Date(Number(r.ends_at)) : null;
+  const fim = r?.ends_at ? new Date(Number(r.ends_at)) : ativa ? new Date(Date.now() + 6 * 3600_000) : null;
   await db.update(connections).set({ restrictionActive: ativa, restrictionEndsAt: ativa ? fim : null, healthAt: new Date() }).where(eq(connections.id, conn.id));
-  if (ativa && !conn.restrictionActive) {
-    await pausarCampanhasDo(conn.id, `O WhatsApp aplicou uma restrição neste número${fim ? ' até ' + fmt(fim) : ''}: mensagens pra quem ainda não respondeu podem não chegar. Espere a restrição acabar pra retomar.`);
-  }
 }
 
 export async function aplicarLimite(conn: Conexao, c: any) {
@@ -62,9 +55,6 @@ export async function aplicarLimite(conn: Conexao, c: any) {
     cappingTotal: typeof c.total_quota === 'number' ? c.total_quota : null,
     healthAt: new Date(),
   }).where(eq(connections.id, conn.id));
-  if (status === 'CAPPED' && conn.cappingStatus !== 'CAPPED') {
-    await pausarCampanhasDo(conn.id, 'O número atingiu o limite de conversas novas do WhatsApp neste ciclo. Retome quando o limite renovar.');
-  }
 }
 
 /** Consulta a saúde do número no AstraCalls. */

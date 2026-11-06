@@ -12,6 +12,7 @@ import Campanhas from './pages/Campanhas';
 import NovaCampanha from './pages/NovaCampanha';
 import CampanhaDetalhe from './pages/CampanhaDetalhe';
 import Equipe from './pages/Equipe';
+import Conversas from './pages/Conversas';
 import Empresas from './pages/Empresas';
 
 function Protegida({ children }: { children: React.ReactNode }) {
@@ -34,6 +35,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           <Route path="/campanhas" element={<Campanhas />} />
           <Route path="/campanhas/nova" element={<NovaCampanha />} />
           <Route path="/campanhas/:id" element={<CampanhaDetalhe />} />
+          <Route path="/conversas" element={<Conversas />} />
           <Route path="/contatos" element={<Contatos />} />
           <Route path="/conexoes" element={<Conexoes />} />
           <Route path="/equipe" element={<Equipe />} />

@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { campaigns, campaignTargets, connections, contacts, conversations, messages } from '../db/schema.js';
 import { astra } from './astra.js';
@@ -61,8 +61,8 @@ export async function gravarMensagem(conv: typeof conversations.$inferSelect, m:
 async function ultimoAlvo(tenantId: number, phone: string) {
   const [a] = await db.select({ id: campaignTargets.id, campaignId: campaignTargets.campaignId, repliedAt: campaignTargets.repliedAt })
     .from(campaignTargets).innerJoin(campaigns, eq(campaigns.id, campaignTargets.campaignId))
-    .where(and(eq(campaigns.tenantId, tenantId), eq(campaignTargets.phone, phone), inArray(campaignTargets.status, ['sent', 'completed', 'no-answer', 'answered']), gte(campaignTargets.doneAt, new Date(Date.now() - 30 * 86400_000))))
-    .orderBy(desc(campaignTargets.doneAt)).limit(1);
+    .where(and(eq(campaigns.tenantId, tenantId), eq(campaignTargets.phone, phone), inArray(campaignTargets.status, ['sent', 'completed', 'no-answer', 'answered', 'warming', 'ringing']), sql`coalesce(${campaignTargets.doneAt}, ${campaignTargets.preSentAt}) >= now() - interval '30 days'`))
+    .orderBy(desc(sql`coalesce(${campaignTargets.doneAt}, ${campaignTargets.preSentAt})`)).limit(1);
   return a;
 }
 
@@ -124,10 +124,10 @@ export async function receberRecibo(conn: Conexao, d: any) {
   if (!lida && !entregue) return;
   const agora = new Date();
   if (lida) {
-    await db.update(campaignTargets).set({ readAt: sql`coalesce(${campaignTargets.readAt}, ${agora.toISOString()}::timestamptz)`, deliveredAt: sql`coalesce(${campaignTargets.deliveredAt}, ${agora.toISOString()}::timestamptz)` }).where(inArray(campaignTargets.astraRef, ids));
+    await db.update(campaignTargets).set({ readAt: sql`coalesce(${campaignTargets.readAt}, ${agora.toISOString()}::timestamptz)`, deliveredAt: sql`coalesce(${campaignTargets.deliveredAt}, ${agora.toISOString()}::timestamptz)` }).where(or(inArray(campaignTargets.astraRef, ids), inArray(campaignTargets.preMsgId, ids)));
     await db.update(messages).set({ status: 'read' }).where(and(inArray(messages.waId, ids), eq(messages.fromMe, true)));
   } else {
-    await db.update(campaignTargets).set({ deliveredAt: sql`coalesce(${campaignTargets.deliveredAt}, ${agora.toISOString()}::timestamptz)` }).where(inArray(campaignTargets.astraRef, ids));
+    await db.update(campaignTargets).set({ deliveredAt: sql`coalesce(${campaignTargets.deliveredAt}, ${agora.toISOString()}::timestamptz)` }).where(or(inArray(campaignTargets.astraRef, ids), inArray(campaignTargets.preMsgId, ids)));
     await db.update(messages).set({ status: 'delivered' }).where(and(inArray(messages.waId, ids), eq(messages.fromMe, true), eq(messages.status, 'sent')));
   }
 }

@@ -42,6 +42,13 @@ export const connections = pgTable('connections', {
   cappingTotal: integer('capping_total'),
   healthAt: timestamp('health_at', { withTimezone: true }),
   lastSyncAt: timestamp('last_sync_at', { withTimezone: true }),
+  // segurança anti-bloqueio (por NÚMERO, vale pra todas as campanhas dele)
+  nextAt: timestamp('next_at', { withTimezone: true }),             // próximo envio liberado (intervalo sorteado)
+  pausedUntil: timestamp('paused_until', { withTimezone: true }),   // pausa de segurança (longa / falhas seguidas)
+  pauseReason: text('pause_reason'),
+  sendsSincePause: integer('sends_since_pause').notNull().default(0),
+  pauseEvery: integer('pause_every'),                               // N sorteado da próxima pausa longa
+  warmupSince: timestamp('warmup_since', { withTimezone: true }).notNull().defaultNow(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => [index('connections_tenant_idx').on(t.tenantId)]);
 
@@ -97,6 +104,10 @@ export const campaigns = pgTable('campaigns', {
   minDelay: integer('min_delay').notNull().default(20),
   maxDelay: integer('max_delay').notNull().default(45),
   pauseReason: text('pause_reason'),
+  // segurança anti-bloqueio desta campanha (mesclada com o padrão/limites do admin)
+  seguranca: jsonb('seguranca').$type<Record<string, unknown>>().notNull().default({}),
+  // por que está parada agora mesmo "enviando" (fora do horário, número em pausa, limite do dia…)
+  waitReason: text('wait_reason'),
   nextAt: timestamp('next_at', { withTimezone: true }),
   startedAt: timestamp('started_at', { withTimezone: true }),
   finishedAt: timestamp('finished_at', { withTimezone: true }),
@@ -121,7 +132,11 @@ export const campaignTargets = pgTable('campaign_targets', {
   repliedAt: timestamp('replied_at', { withTimezone: true }),
   reply: text('reply'),
   optedOut: boolean('opted_out').notNull().default(false),
-}, t => [index('targets_campaign_status_idx').on(t.campaignId, t.status), index('targets_astra_ref_idx').on(t.astraRef), index('targets_phone_idx').on(t.phone)]);
+  // ligação com "mensagem antes": status warming = mensagem enviada, esperando pra ligar
+  preMsgId: text('pre_msg_id'),
+  preSentAt: timestamp('pre_sent_at', { withTimezone: true }),
+  callAfter: timestamp('call_after', { withTimezone: true }),
+}, t => [index('targets_campaign_status_idx').on(t.campaignId, t.status), index('targets_astra_ref_idx').on(t.astraRef), index('targets_phone_idx').on(t.phone), index('targets_pre_msg_idx').on(t.preMsgId)]);
 
 // Conversas: uma por número de WhatsApp da empresa + telefone do contato.
 export const conversations = pgTable('conversations', {
@@ -140,6 +155,13 @@ export const conversations = pgTable('conversations', {
 }, t => [uniqueIndex('conversations_conn_phone_uq').on(t.connectionId, t.phone), index('conversations_tenant_idx').on(t.tenantId, t.lastMessageAt)]);
 
 // status (enviadas): sent | delivered | read | failed
+// Configurações do sistema (superadmin): chave → JSON. Ex.: 'antiban' = padrões e limites de segurança.
+export const settings = pgTable('settings', {
+  key: text('key').primaryKey(),
+  value: jsonb('value').$type<Record<string, unknown>>().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const messages = pgTable('messages', {
   id: serial('id').primaryKey(),
   conversationId: integer('conversation_id').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
