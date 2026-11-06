@@ -50,6 +50,13 @@
       "when": 1793936044774,
       "tag": "0006_extrator_leads",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793978055614,
+      "tag": "0007_mapa_regiao",
+      "breakpoints": true
     }
   ]
 }

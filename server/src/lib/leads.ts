@@ -31,10 +31,16 @@ async function gmaps<T = any>(metodo: string, caminho: string, corpo?: unknown, 
 /** Quantos "rolagens" o extrator faz pra chegar perto da quantidade pedida (~12 por rolagem). */
 const profundidade = (max: number) => Math.min(25, Math.max(1, Math.ceil(max / 12)));
 
-export async function iniciarBusca(s: { id: number; query: string; location: string; maxResults: number; withEmail: boolean }) {
-  const termo = s.location ? `${s.query} em ${s.location}` : s.query;
+/** Zoom do Google Maps que cobre o raio escolhido (a busca acontece na área visível do mapa). */
+export function zoomDoRaio(km: number) { return km <= 1 ? 16 : km <= 3 ? 15 : km <= 5 ? 14 : km <= 10 ? 13 : 12 }
+
+export async function iniciarBusca(s: { id: number; query: string; location: string; maxResults: number; withEmail: boolean; lat?: number | null; lng?: number | null; radiusKm?: number | null }) {
+  const noMapa = s.lat != null && s.lng != null;
+  // com ponto no mapa a busca é centrada nele; sem mapa, vai o nome do lugar junto do termo
+  const termo = !noMapa && s.location ? `${s.query} em ${s.location}` : s.query;
+  const geo = noMapa ? { lat: s.lat!.toFixed(6), lon: s.lng!.toFixed(6), zoom: zoomDoRaio(s.radiusKm ?? 3) } : { zoom: 15 };
   const r = await gmaps<{ id: string }>('POST', '/api/v1/jobs', {
-    name: `inoova-${s.id}`, keywords: [termo], lang: 'pt', zoom: 15, depth: profundidade(s.maxResults),
+    name: `inoova-${s.id}`, keywords: [termo], lang: 'pt', ...geo, depth: profundidade(s.maxResults),
     email: s.withEmail, max_time: Math.min(1800, 180 + s.maxResults * (s.withEmail ? 6 : 3)),
   });
   await db.update(leadSearches).set({ jobId: r.id, status: 'working' }).where(eq(leadSearches.id, s.id));
@@ -70,9 +76,25 @@ export function lerCsv(texto: string): Record<string, string>[] {
 /** Celular brasileiro: 55 + DDD + 9 + 8 dígitos (fixo raramente tem WhatsApp). */
 export const ehCelular = (p: string | null) => !!p && /^55\d{2}9\d{8}$/.test(p);
 
-export async function guardarResultado(searchId: number, csv: string) {
+/** Distância em km entre dois pontos (fórmula de haversine). */
+export function distanciaKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const R = 6371, rad = (x: number) => x * Math.PI / 180;
+  const dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+export async function guardarResultado(searchId: number, csv: string, regiao?: { lat: number | null; lng: number | null; radiusKm: number | null }) {
   const vistos = new Set<string>();
-  const linhas = lerCsv(csv).map(r => {
+  const centro = regiao?.lat != null && regiao?.lng != null ? { lat: regiao.lat, lng: regiao.lng } : null;
+  // o Google às vezes traz empresa longe da área do mapa: fica de fora o que passar de 1,5× o raio
+  const limiteKm = centro ? Math.max(1, regiao!.radiusKm ?? 3) * 1.5 : 0;
+  const linhas = lerCsv(csv).filter(r => {
+    if (!centro) return true;
+    const lat = Number(r.latitude), lng = Number(r.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) return true;
+    return distanciaKm(centro, { lat, lng }) <= limiteKm;
+  }).map(r => {
     const raw = (r.phone || '').trim();
     const phone = raw ? normalizarTelefone(raw.startsWith('+') ? raw : raw.replace(/^0+/, '')) : null;
     return {
@@ -107,7 +129,7 @@ async function acompanhar() {
         const st = String(job.Status || job.status || '').toLowerCase();
         if (st === 'ok') {
           const csv = await gmaps<string>('GET', `/api/v1/jobs/${encodeURIComponent(s.jobId)}/download`, undefined, true);
-          await guardarResultado(s.id, csv);
+          await guardarResultado(s.id, csv, s);
           gmaps('DELETE', `/api/v1/jobs/${encodeURIComponent(s.jobId)}`).catch(() => {}); // libera espaço no extrator
         } else if (st === 'failed') {
           await db.update(leadSearches).set({ status: 'failed', error: 'O Google não devolveu resultados (pode ter bloqueado temporariamente). Tente de novo em alguns minutos.', finishedAt: new Date() }).where(eq(leadSearches.id, s.id));

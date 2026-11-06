@@ -33,14 +33,17 @@ leadsRouter.post('/', async (req, res) => {
     location: z.string().trim().max(120).default(''),
     maxResults: z.number().int().min(10).max(500).default(50),
     withEmail: z.boolean().default(false),
-  }).safeParse(req.body);
+    lat: z.number().min(-90).max(90).nullish(),
+    lng: z.number().min(-180).max(180).nullish(),
+    radiusKm: z.number().int().min(1).max(50).nullish(),
+  }).refine(d => (d.lat == null) === (d.lng == null), 'Ponto do mapa incompleto.').safeParse(req.body);
   if (!p.success) return res.status(400).json({ error: p.error.issues[0].message });
   const tid = tenantDe(req);
   const [{ ativas }] = await db.select({ ativas: count() }).from(leadSearches).where(and(eq(leadSearches.tenantId, tid), inArray(leadSearches.status, ['pending', 'working'])));
   if (ativas > 0) return res.status(409).json({ error: 'Já tem uma busca em andamento. Espere ela terminar pra começar outra.' });
   const [{ hoje }] = await db.select({ hoje: count() }).from(leadSearches).where(and(eq(leadSearches.tenantId, tid), gte(leadSearches.createdAt, new Date(Date.now() - 86400_000))));
   if (hoje >= BUSCAS_POR_DIA) return res.status(429).json({ error: `Limite de ${BUSCAS_POR_DIA} buscas por dia atingido. Tente amanhã.` });
-  const [s] = await db.insert(leadSearches).values({ tenantId: tid, createdBy: req.auth!.userId, ...p.data }).returning();
+  const [s] = await db.insert(leadSearches).values({ tenantId: tid, createdBy: req.auth!.userId, ...p.data, radiusKm: p.data.lat != null ? (p.data.radiusKm ?? 3) : null }).returning();
   try { await iniciarBusca(s) } catch (e) { console.warn('[leads] iniciar', (e as Error).message) } // o acompanhamento tenta de novo
   res.status(201).json({ search: { ...s, jobId: undefined } });
 });

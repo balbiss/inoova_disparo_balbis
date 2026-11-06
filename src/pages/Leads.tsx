@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Download, ExternalLink, Loader2, MapPin, Search, Smartphone, Sparkles, Star, Trash2, UserPlus, AlertTriangle } from 'lucide-react';
+import { Download, ExternalLink, Loader2, Map as IconeMapa, MapPin, Search, X, Smartphone, Sparkles, Star, Trash2, UserPlus, AlertTriangle } from 'lucide-react';
 import { api, baixar, confirmar, erro, fmtData, fmtNum, fmtTel, ok } from '../lib/api';
 import { Cabecalho, Carregando, Vazio, btn, inputStyle } from '../components/ui';
+import type { Regiao } from '../components/MapaRegiao';
+const MapaRegiao = lazy(() => import('../components/MapaRegiao'));
 
-type Busca = { id: number; query: string; location: string; maxResults: number; withEmail: boolean; status: 'pending' | 'working' | 'done' | 'failed'; total: number; error: string | null; createdAt: string; finishedAt: string | null; comTelefone?: number; celulares?: number };
+type Busca = { id: number; query: string; location: string; maxResults: number; withEmail: boolean; lat?: number | null; lng?: number | null; radiusKm?: number | null; status: 'pending' | 'working' | 'done' | 'failed'; total: number; error: string | null; createdAt: string; finishedAt: string | null; comTelefone?: number; celulares?: number };
 type Lead = { id: number; name: string; phone: string | null; phoneRaw: string | null; mobile: boolean; category: string; address: string; website: string; emails: string; rating: string | null; reviewCount: number | null; link: string; imported: boolean };
 type Categoria = { id: number; name: string };
 
@@ -23,6 +25,8 @@ export default function Leads() {
   const [configurado, setConfigurado] = useState(true);
   const [o, setO] = useState('');
   const [onde, setOnde] = useState('');
+  const [regiao, setRegiao] = useState<Regiao | null>(null);
+  const [mapaAberto, setMapaAberto] = useState(false);
   const [qtd, setQtd] = useState(50);
   const [emails, setEmails] = useState(false);
   const [buscando, setBuscando] = useState(false);
@@ -38,7 +42,7 @@ export default function Leads() {
     if (o.trim().length < 2) return erro('Diga o que procurar (ex.: pizzaria, loja de móveis, dentista).');
     setBuscando(true);
     try {
-      const r = await api<{ search: Busca }>('POST', '/lead-searches', { query: o.trim(), location: onde.trim(), maxResults: qtd, withEmail: emails });
+      const r = await api<{ search: Busca }>('POST', '/lead-searches', { query: o.trim(), location: regiao ? regiao.label : onde.trim(), maxResults: qtd, withEmail: emails, ...(regiao ? { lat: regiao.lat, lng: regiao.lng, radiusKm: regiao.radiusKm } : {}) });
       ok('Busca iniciada! Leva alguns minutos; pode continuar usando o sistema.');
       setAberta(r.search.id); carregar();
     } catch (e) { erro(e) } finally { setBuscando(false) }
@@ -63,8 +67,19 @@ export default function Leads() {
               <input style={{ ...inputStyle, paddingLeft: 34, height: 40 }} value={o} onChange={e => setO(e.target.value)} onKeyDown={e => e.key === 'Enter' && buscar()} placeholder="Ex.: loja de móveis, dentista, academia" maxLength={120} /></div>
           </label>
           <label><span style={rot}>Onde?</span>
-            <div style={{ position: 'relative' }}><MapPin size={16} color="var(--muted)" style={{ position: 'absolute', left: 11, top: 12 }} />
-              <input style={{ ...inputStyle, paddingLeft: 34, height: 40 }} value={onde} onChange={e => setOnde(e.target.value)} onKeyDown={e => e.key === 'Enter' && buscar()} placeholder="Cidade, bairro ou estado" maxLength={120} /></div>
+            {regiao ? (
+              <div className="onde-escolhido" title={regiao.label}>
+                <MapPin size={16} color="var(--verde-escuro)" style={{ flex: 'none' }} />
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 14, fontWeight: 700 }}>{regiao.label}</span>
+                <span style={{ fontSize: 12, color: 'var(--verde-escuro)', whiteSpace: 'nowrap' }}>raio {regiao.radiusKm} km</span>
+                <button type="button" onClick={() => setMapaAberto(true)} title="Mudar no mapa" aria-label="Mudar no mapa"><IconeMapa size={15} /></button>
+                <button type="button" onClick={() => setRegiao(null)} title="Tirar a região do mapa" aria-label="Tirar a região do mapa"><X size={15} /></button>
+              </div>
+            ) : (
+              <div style={{ position: 'relative' }}><MapPin size={16} color="var(--muted)" style={{ position: 'absolute', left: 11, top: 12 }} />
+                <input style={{ ...inputStyle, paddingLeft: 34, paddingRight: 92, height: 40 }} value={onde} onChange={e => setOnde(e.target.value)} onKeyDown={e => e.key === 'Enter' && buscar()} placeholder="Cidade, bairro ou estado" maxLength={120} />
+                <button type="button" className="onde-mapa" onClick={() => setMapaAberto(true)}><IconeMapa size={14} /> Mapa</button></div>
+            )}
           </label>
           <label><span style={rot}>Quantos?</span>
             <select style={{ ...inputStyle, height: 40 }} value={qtd} onChange={e => setQtd(Number(e.target.value))}>{QTDS.map(n => <option key={n} value={n}>até {n}</option>)}</select>
@@ -78,6 +93,12 @@ export default function Leads() {
         </label>
       </section>
 
+      {mapaAberto && (
+        <Suspense fallback={null}>
+          <MapaRegiao inicial={regiao} textoInicial={onde} onClose={() => setMapaAberto(false)} onEscolher={r => { setRegiao(r); setOnde(r.label); setMapaAberto(false) }} />
+        </Suspense>
+      )}
+
       {buscas.length === 0 ? (
         <section style={{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 14 }}>
           <Vazio icone={<Sparkles size={26} />} titulo="Faça sua primeira busca" texto="Exemplo: “pet shop” em “Belém, PA”. A lista aparece aqui em poucos minutos." />
@@ -89,7 +110,7 @@ export default function Leads() {
             {buscas.map(b => (
               <button key={b.id} onClick={() => setAberta(b.id)} style={{ width: '100%', textAlign: 'left', padding: '11px 14px', border: 'none', borderBottom: '1px solid var(--line)', background: aberta === b.id ? 'var(--verde-soft)' : 'var(--card)', boxShadow: aberta === b.id ? 'inset 3px 0 0 var(--verde)' : undefined }}>
                 <div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.query}</div>
-                <div style={{ fontSize: 12.5, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.location || 'Sem local'} · {fmtData(b.createdAt)}</div>
+                <div style={{ fontSize: 12.5, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.location || 'Sem local'}{b.radiusKm ? ` (${b.radiusKm} km)` : ''} · {fmtData(b.createdAt)}</div>
                 <div style={{ marginTop: 5, display: 'flex', gap: 6, flexWrap: 'wrap' }}><Situacao b={b} />{b.status === 'done' && !!b.celulares && <span style={tag('#54656F', '#EEF1F2')}>{b.celulares} celulares</span>}</div>
               </button>
             ))}
@@ -147,7 +168,7 @@ function Resultado({ id, onMudou, onApagada }: { id: number; onMudou: () => void
       <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 200 }}>
           <div style={{ fontWeight: 700, fontSize: 16 }}>{s.query}{s.location && <span style={{ fontWeight: 400, color: 'var(--muted)' }}> em {s.location}</span>}</div>
-          <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>Buscado em {fmtData(s.createdAt)} · até {s.maxResults} resultados{s.withEmail ? ' · com e-mails' : ''}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>Buscado em {fmtData(s.createdAt)}{s.radiusKm ? ` · raio de ${s.radiusKm} km no mapa` : ''} · até {s.maxResults} resultados{s.withEmail ? ' · com e-mails' : ''}</div>
         </div>
         {s.status === 'done' && <button style={btn('ghost', { minHeight: 34 })} onClick={() => baixar(`/lead-searches/${id}/export`, `leads-${id}.csv`)}><Download size={15} /> Planilha</button>}
         {!andamento && <button style={btn('ghost', { minHeight: 34, padding: '0 10px' })} title="Apagar busca" onClick={apagar}><Trash2 size={15} color="var(--perigo)" /></button>}

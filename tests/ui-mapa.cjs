@@ -1,0 +1,74 @@
+// Mapa do "Onde?" no extrator de leads (gosom simulado: server/scripts/gmaps-mock.mjs).
+// Uso: PW=<playwright-core> node tests/ui-mapa.cjs [http://localhost:5195] [pasta-dos-prints]
+const { chromium } = require(process.env.PW || 'playwright-core');
+const path = require('path');
+const fs = require('fs');
+const WEB = process.argv[2] || 'http://localhost:5195';
+const API = WEB.replace(':5195', ':3020') + '/api';
+const PRINTS = process.argv[3] || path.join(__dirname, 'prints');
+fs.mkdirSync(PRINTS, { recursive: true });
+let ok = 0, falhas = 0;
+const check = (c, nome) => { if (c) { ok++; console.log('  ✓', nome) } else { falhas++; console.log('  ✗', nome) } };
+const j = async (m, p, t, b) => (await fetch(API + p, { method: m, headers: { 'Content-Type': 'application/json', ...(t ? { Authorization: 'Bearer ' + t } : {}) }, body: b ? JSON.stringify(b) : undefined })).json().catch(() => ({}));
+const sim = (sel, page, ms = 10000) => page.waitForSelector(sel, { timeout: ms }).then(() => true).catch(() => false);
+
+(async () => {
+  const suf = Date.now().toString(36);
+  const SA = (await j('POST', '/auth/login', null, { email: 'admin@teste.local', password: '123456' })).token;
+  const ten = (await j('POST', '/admin/tenants', SA, { name: 'Loja Mapa', adminName: 'Ana', adminEmail: `uimapa-${suf}@teste.local`, adminPassword: 'senha123' })).tenant;
+  const login = await j('POST', '/auth/login', null, { email: `uimapa-${suf}@teste.local`, password: 'senha123' });
+  const browser = await chromium.launch({ executablePath: process.env.CHROME || 'C:/Program Files/Google/Chrome/Application/chrome.exe' });
+  const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
+  const errosConsole = [];
+  page.on('pageerror', e => errosConsole.push(e.message));
+  let corpo = null;
+  page.on('request', r => { if (r.method() === 'POST' && r.url().endsWith('/api/lead-searches')) corpo = r.postDataJSON() });
+  await page.goto(WEB + '/login');
+  await page.evaluate(([t, u]) => { localStorage.setItem('token', t); localStorage.setItem('usuario', JSON.stringify(u)) }, [login.token, login.user]);
+  await page.goto(WEB + '/leads');
+  await sim('text=Faça sua primeira busca', page);
+  await page.fill('input[placeholder="Cidade, bairro ou estado"]', 'Belém, PA');
+  await page.click('button.onde-mapa');
+  check(await sim('.mapa-janela', page), 'abre a janela do mapa');
+  check(await sim('.leaflet-tile-loaded', page, 15000), 'mapa carrega');
+  check(await page.isVisible('text=Clique no mapa para marcar a região'), 'dica de clicar no mapa');
+  await page.waitForTimeout(2500); // voa até Belém
+  await page.screenshot({ path: path.join(PRINTS, 'm0-aberto.png') });
+  const box = await page.locator('.mapa-leaflet').boundingBox();
+  await page.mouse.click(box.x + box.width * 0.55, box.y + box.height * 0.5);
+  check(await sim('.pino-gota', page), 'pino aparece onde clicou');
+  check(await sim('path.leaflet-interactive, .leaflet-overlay-pane path', page), 'círculo do raio');
+  await page.waitForFunction(() => !document.body.innerText.includes('Descobrindo o lugar'), null, { timeout: 15000 }).catch(() => {});
+  const nome = await page.locator('.mapa-escolha div >> nth=2').innerText().catch(() => '');
+  check(/Belém|Ananindeua|PA/.test(nome), 'descobre o nome do lugar: ' + nome);
+  await page.click('.mapa-raios button:has-text("5 km")');
+  await page.waitForTimeout(900);
+  await page.screenshot({ path: path.join(PRINTS, 'm1-marcado.png') });
+  // procurar bairro
+  await page.fill('.mapa-busca input', 'Umarizal Belém');
+  check(await sim('.mapa-sugestoes button', page, 10000), 'sugestões ao procurar bairro');
+  await page.click('.mapa-sugestoes button >> nth=0');
+  await page.waitForTimeout(1200);
+  const nome2 = await page.locator('.mapa-escolha div >> nth=2').innerText().catch(() => '');
+  check(/Umarizal/.test(nome2), 'escolher sugestão move o pino: ' + nome2);
+  await page.screenshot({ path: path.join(PRINTS, 'm2-bairro.png') });
+  await page.click('button:has-text("Usar esta região")');
+  check(await sim('.onde-escolhido:has-text("raio 5 km")', page), 'campo mostra a região e o raio');
+  await page.fill('input[placeholder^="Ex.: loja de móveis"]', 'dentista');
+  await page.screenshot({ path: path.join(PRINTS, 'm3-campo.png') });
+  await page.click('button:has-text("Buscar")');
+  await page.waitForTimeout(1500);
+  check(corpo && typeof corpo.lat === 'number' && typeof corpo.lng === 'number' && corpo.radiusKm === 5 && /Umarizal/.test(corpo.location), 'envia lat/lng/raio pro servidor ' + JSON.stringify(corpo));
+  check(await sim('text=raio de 5 km no mapa', page), 'resultado mostra o raio');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.click('.onde-escolhido button[title="Mudar no mapa"]');
+  check(await sim('.mapa-janela', page), 'reabre o mapa no celular');
+  await page.waitForTimeout(1500);
+  check(!(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)), 'celular 390px sem rolagem lateral');
+  await page.screenshot({ path: path.join(PRINTS, 'm4-celular.png') });
+  check(errosConsole.length === 0, 'sem erro no console ' + (errosConsole.length ? JSON.stringify(errosConsole.slice(0, 2)) : ''));
+  await browser.close();
+  await j('PATCH', `/admin/tenants/${ten.id}`, SA, { active: false }); await j('DELETE', `/admin/tenants/${ten.id}`, SA);
+  console.log(`\n${ok} ok, ${falhas} falha(s)`);
+  process.exit(falhas ? 1 : 0);
+})().catch(e => { console.error(e); process.exit(1) });

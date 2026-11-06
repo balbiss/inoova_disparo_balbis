@@ -1,4 +1,4 @@
-import { boolean, index, integer, jsonb, pgTable, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { boolean, doublePrecision, index, integer, jsonb, pgTable, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 
 /** Botão de campanha: quick_reply (resposta), cta_url (link), cta_call (ligar), cta_copy (copiar código). */
 export type BotaoCampanha = { type: 'quick_reply' | 'cta_url' | 'cta_call' | 'cta_copy'; text: string; value?: string };
@@ -201,6 +201,10 @@ export const leadSearches = pgTable('lead_searches', {
   location: text('location').notNull().default(''),
   maxResults: integer('max_results').notNull().default(50),
   withEmail: boolean('with_email').notNull().default(false),
+  // região escolhida no mapa (opcional): centro + raio em km
+  lat: doublePrecision('lat'),
+  lng: doublePrecision('lng'),
+  radiusKm: integer('radius_km'),
   jobId: text('job_id'),
   status: text('status').notNull().default('pending'),
   total: integer('total').notNull().default(0),
