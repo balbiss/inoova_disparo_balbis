@@ -99,15 +99,28 @@ async function nomeNoWhatsapp(sessionId: string, phone: string) {
 
 /** Busca a foto do perfil e o nome no WhatsApp (no máximo a cada 12 h por conversa). */
 export async function atualizarPerfil(conv: typeof conversations.$inferSelect, forcar = false) {
-  if (!forcar && conv.profileAt && Date.now() - conv.profileAt.getTime() < 12 * 3600_000) return conv;
+  // com foto: confere a cada 12 h; sem foto: tenta de novo a cada 1 h
+  const validade = conv.avatarUrl ? 12 * 3600_000 : 3600_000;
+  if (!forcar && conv.profileAt && Date.now() - conv.profileAt.getTime() < validade) return conv;
   const [conn] = await db.select().from(connections).where(eq(connections.id, conv.connectionId));
   if (!conn) return conv;
   let avatarUrl: string | null = conv.avatarUrl;
+  const base = `/api/sessions/${encodeURIComponent(conn.sessionId)}/contacts`;
   try {
-    const r = await astra<{ url?: string }>('GET', `/api/sessions/${encodeURIComponent(conn.sessionId)}/contacts/${conv.phone}/picture?preview=true`, undefined, { timeoutMs: 15_000 });
-    avatarUrl = r?.url || null;
+    // a foto só vem pelo número como o WhatsApp registrou (muitas vezes SEM o 9º dígito):
+    // pergunta o número canônico antes
+    let canonico = conv.phone;
+    try {
+      const info = await astra<{ number?: string; phone?: string }>('GET', `${base}/${conv.phone}`, undefined, { timeoutMs: 15_000 });
+      canonico = String(info?.phone || info?.number || conv.phone).replace(/\D/g, '') || conv.phone;
+    } catch (e) {
+      if ((e as { status?: number }).status === 503) return conv;
+    }
+    const r = await astra<{ url?: string; profilePictureURL?: string }>('GET', `${base}/${canonico}/picture?preview=true`, undefined, { timeoutMs: 15_000 });
+    avatarUrl = r?.url || r?.profilePictureURL || null;
   } catch (e) {
     if ((e as { status?: number }).status === 503) return conv; // número desconectado: tenta depois
+    avatarUrl = null; // sem foto ou foto privada
   }
   const waName = (await nomeNoWhatsapp(conn.sessionId, conv.phone)) || conv.waName;
   const [novo] = await db.update(conversations).set({ avatarUrl, waName, profileAt: new Date(), ...(!conv.name && waName ? { name: waName } : {}) })

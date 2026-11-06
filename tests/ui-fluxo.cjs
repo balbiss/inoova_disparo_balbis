@@ -269,6 +269,18 @@ async function semRolagemLateral(page, nome) {
     for (const rota of ['/painel', '/campanhas/nova', '/contatos', '/conversas', '/conexoes']) { await page.goto(BASE + rota); await page.waitForTimeout(600); await semRolagemLateral(page, `${rota} ${w}px`) }
   }
 
+  // limpeza: cancela as campanhas, remove o número (sessão no AstraCalls) e a empresa de teste
+  try {
+    const API2 = BASE.replace(':5195', ':3020') + '/api';
+    const j = async (m, p, t, b) => (await fetch(API2 + p, { method: m, headers: { 'Content-Type': 'application/json', ...(t ? { Authorization: 'Bearer ' + t } : {}) }, body: b ? JSON.stringify(b) : undefined })).json().catch(() => ({}));
+    const A = (await j('POST', '/auth/login', null, { email: emailAdmin, password: 'senha123' })).token;
+    for (const c of (await j('GET', '/campaigns', A)).campaigns || []) await j('POST', '/campaigns/' + c.id + '/cancel', A);
+    for (const c of (await j('GET', '/connections', A)).connections || []) await j('DELETE', '/connections/' + c.id, A);
+    const SA = (await j('POST', '/auth/login', null, { email: 'admin@teste.local', password: '123456' })).token;
+    const t = ((await j('GET', '/admin/tenants', SA)).tenants || []).find(x => x.adminEmail === emailAdmin);
+    if (t) { await j('PATCH', '/admin/tenants/' + t.id, SA, { active: false }); await j('DELETE', '/admin/tenants/' + t.id, SA) }
+  } catch (e) { console.warn('limpeza:', e.message) }
+
   check(errosConsole.length === 0, 'sem erro no console ' + (errosConsole.length ? JSON.stringify(errosConsole.slice(0, 3)) : ''));
   await browser.close();
   console.log(`\n${ok} ok, ${falhas} falha(s) — prints em ${PRINTS}`);

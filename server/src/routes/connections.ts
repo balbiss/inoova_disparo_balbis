@@ -29,7 +29,7 @@ async function fotoDoNumero(c: typeof connections.$inferSelect, phone: string | 
   const f = fotos.get(c.id);
   if (f && f.phone === phone && Date.now() - f.at < 12 * 3600_000) return f.url;
   let url: string | null = null;
-  try { url = (await astra<{ url?: string }>('GET', `/api/sessions/${encodeURIComponent(c.sessionId)}/contacts/${phone}/picture?preview=true`, undefined, { timeoutMs: 10_000 }))?.url || null } catch { /* sem foto */ }
+  try { const r = await astra<{ url?: string; profilePictureURL?: string }>('GET', `/api/sessions/${encodeURIComponent(c.sessionId)}/contacts/${phone}/picture?preview=true`, undefined, { timeoutMs: 10_000 }); url = r?.url || r?.profilePictureURL || null } catch { /* sem foto */ }
   fotos.set(c.id, { url, at: Date.now(), phone });
   return url;
 }

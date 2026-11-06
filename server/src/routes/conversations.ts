@@ -45,7 +45,7 @@ conversationsRouter.get('/', async (req, res) => {
     .leftJoin(campaigns, eq(campaigns.id, conversations.lastCampaignId))
     .where(where).orderBy(desc(conversations.lastMessageAt)).limit(per).offset((page - 1) * per);
   // foto/nome de quem ainda não tem (ou está velho): busca em segundo plano, aparece na próxima atualização
-  const velhas = l.filter(c => !c.profileAt || Date.now() - new Date(c.profileAt).getTime() > 12 * 3600_000).slice(0, 8);
+  const velhas = l.filter(c => !c.profileAt || Date.now() - new Date(c.profileAt).getTime() > (c.avatarUrl ? 12 : 1) * 3600_000).slice(0, 8);
   if (velhas.length) void (async () => {
     for (const v of velhas) { const [c] = await db.select().from(conversations).where(eq(conversations.id, v.id)); if (c) await atualizarPerfil(c).catch(() => {}) }
   })();

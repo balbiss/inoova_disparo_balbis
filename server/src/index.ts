@@ -15,6 +15,9 @@ import { iniciarEventosAstra } from './lib/astra.js';
 import { iniciarWorker } from './lib/worker.js';
 import { iniciarSaude } from './lib/saude.js';
 import { juntarConversasDuplicadas } from './lib/conversas.js';
+import { isNull } from 'drizzle-orm';
+import { db } from './db/client.js';
+import { conversations } from './db/schema.js';
 import { webhooksRouter } from './routes/webhooks.js';
 import { conversationsRouter } from './routes/conversations.js';
 
@@ -64,6 +67,8 @@ async function iniciar() {
       await new Promise(r => setTimeout(r, 2000));
     }
   }
+  // quem ficou sem foto busca de novo (ex.: correção do 9º dígito na busca da foto)
+  await db.update(conversations).set({ profileAt: null }).where(isNull(conversations.avatarUrl)).catch(() => {});
   await juntarConversasDuplicadas().catch(e => console.warn('[conversas] juntar duplicadas:', (e as Error).message));
   iniciarEventosAstra();
   iniciarWorker();
