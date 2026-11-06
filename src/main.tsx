@@ -13,6 +13,7 @@ import NovaCampanha from './pages/NovaCampanha';
 import CampanhaDetalhe from './pages/CampanhaDetalhe';
 import Equipe from './pages/Equipe';
 import Conversas from './pages/Conversas';
+import Grupos from './pages/Grupos';
 import Empresas from './pages/Empresas';
 import Seguranca from './pages/Seguranca';
 
@@ -38,6 +39,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           <Route path="/campanhas/:id" element={<CampanhaDetalhe />} />
           <Route path="/conversas" element={<Conversas />} />
           <Route path="/contatos" element={<Contatos />} />
+          <Route path="/grupos" element={<Grupos />} />
           <Route path="/conexoes" element={<Conexoes />} />
           <Route path="/equipe" element={<Equipe />} />
           <Route path="/empresas" element={<Empresas />} />

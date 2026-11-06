@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FileUp, Plus, Search, Tags, Trash2, UsersRound, Pencil, ShieldCheck, Square } from 'lucide-react';
+import { FileUp, Plus, Search, Tags, Trash2, UsersRound, Pencil, ShieldCheck, Square, UserPlus } from 'lucide-react';
 import { api, confirmar, erro, fmtData, fmtNum, fmtTel, getUsuario, ok } from '../lib/api';
 import { Cabecalho, Campo, Carregando, Modal, Paginacao, Pilula, Progresso, Vazio, btn, inputStyle } from '../components/ui';
 import { lerCsv, lerLista, mapearColunas } from '../lib/planilha';
@@ -26,6 +26,7 @@ export default function Contatos() {
   const [sel, setSel] = useState<Set<number>>(new Set());
   const [editar, setEditar] = useState<Contato | 'novo' | null>(null);
   const [importar, setImportar] = useState(false);
+  const [extrair, setExtrair] = useState(false);
   const [gerenciar, setGerenciar] = useState(false);
   const per = 50;
   const limite = getUsuario()?.empresa?.maxContacts;
@@ -86,6 +87,7 @@ export default function Contatos() {
       <Cabecalho titulo="Contatos" contagem={dados ? `${fmtNum(dados.total)}${limite ? ' de ' + fmtNum(limite) : ''}` : undefined}>
         <button style={btn('ghost')} onClick={validar} disabled={!!val?.rodando || !dados?.total}><ShieldCheck size={16} /> Validar números</button>
         <button style={btn('ghost')} onClick={() => setGerenciar(true)}><Tags size={16} /> Categorias</button>
+        <button style={btn('ghost')} onClick={() => setExtrair(true)}><UserPlus size={16} /> Extrair de grupos</button>
         <button style={btn('ghost')} onClick={() => setImportar(true)}><FileUp size={16} /> Importar</button>
         <button style={btn()} onClick={() => setEditar('novo')}><Plus size={16} /> Novo contato</button>
       </Cabecalho>
@@ -155,6 +157,7 @@ export default function Contatos() {
 
       {editar && <EditarContato contato={editar === 'novo' ? null : editar} cats={cats} onClose={() => setEditar(null)} onSalvo={() => { setEditar(null); recarregarTudo() }} />}
       {importar && <Importar cats={cats} onClose={() => setImportar(false)} onFeito={() => { setImportar(false); setPage(1); recarregarTudo() }} />}
+      {extrair && <ExtrairGrupos cats={cats} onClose={() => setExtrair(false)} onFeito={() => { setExtrair(false); setPage(1); recarregarTudo() }} />}
       {gerenciar && <Categorias cats={cats} onClose={() => setGerenciar(false)} onMudou={recarregarTudo} />}
     </>
   );
@@ -317,6 +320,84 @@ function Categorias({ cats, onClose, onMudou }: { cats: Categoria[]; onClose: ()
           <button title="Excluir categoria" onClick={() => excluir(c)} style={{ border: 'none', background: 'none', color: 'var(--perigo)', padding: 4, display: 'flex' }}><Trash2 size={15} /></button>
         </div>
       ))}
+    </Modal>
+  );
+}
+
+/** Extrair contatos de grupos do WhatsApp: os participantes viram contatos (pra mandar individual). */
+function ExtrairGrupos({ cats, onClose, onFeito }: { cats: Categoria[]; onClose: () => void; onFeito: () => void }) {
+  const [conns, setConns] = useState<{ id: number; name: string; connected: boolean }[] | null>(null);
+  const [connId, setConnId] = useState<number | ''>('');
+  const [grupos, setGrupos] = useState<{ jid: string; name: string; participants: number; withPhone: number }[] | null>(null);
+  const [carregando, setCarregando] = useState(false);
+  const [sel, setSel] = useState<string[]>([]);
+  const [busca, setBusca] = useState('');
+  const [cat, setCat] = useState('');
+  const [enviando, setEnviando] = useState(false);
+
+  useEffect(() => {
+    api<{ connections: { id: number; name: string; connected: boolean }[] }>('GET', '/connections').then(r => {
+      setConns(r.connections);
+      const c = r.connections.find(x => x.connected);
+      if (c) setConnId(c.id);
+    }).catch(erro);
+  }, []);
+  useEffect(() => {
+    if (!connId) return;
+    setCarregando(true); setGrupos(null); setSel([]);
+    api<{ groups: { jid: string; name: string; participants: number; withPhone: number }[] }>('GET', `/connections/${connId}/groups`)
+      .then(r => setGrupos(r.groups)).catch(e => { erro(e); setGrupos([]) }).finally(() => setCarregando(false));
+  }, [connId]);
+
+  const total = (grupos || []).filter(g => sel.includes(g.jid)).reduce((n, g) => n + g.withPhone, 0);
+  const extrair = async () => {
+    setEnviando(true);
+    try {
+      const r = await api<{ created: number; updated: number; hidden: number }>('POST', '/contacts/import-groups', { connectionId: connId, groupJids: sel, categoryId: cat ? Number(cat) : null });
+      ok(`${fmtNum(r.created)} contato(s) novo(s)${r.updated ? `, ${fmtNum(r.updated)} já existia(m)` : ''}${r.hidden ? `. ${fmtNum(r.hidden)} participante(s) esconde(m) o número no grupo` : ''}.`);
+      onFeito();
+    } catch (e) { erro(e) } finally { setEnviando(false) }
+  };
+
+  return (
+    <Modal title="Extrair contatos de grupos" subtitle="Os participantes dos grupos que você escolher entram na sua lista de contatos, pra você mandar mensagem individual pra cada um." onClose={onClose} width={580}
+      footer={<><button style={btn('ghost')} onClick={onClose}>Cancelar</button><button style={btn()} disabled={enviando || !sel.length} onClick={extrair}>{enviando ? 'Extraindo…' : `Extrair ${total ? '~' + fmtNum(total) + ' contato(s)' : ''}`}</button></>}>
+      {!conns ? <Carregando /> : conns.length === 0 ? <p style={{ color: 'var(--muted)' }}>Conecte um número de WhatsApp primeiro (menu Conexões).</p> : (
+        <>
+          <Campo label="Grupos de qual número?">
+            <select style={inputStyle} value={connId} onChange={e => setConnId(Number(e.target.value) || '')}>
+              {conns.map(c => <option key={c.id} value={c.id} disabled={!c.connected}>{c.name}{c.connected ? '' : ' (desconectado)'}</option>)}
+            </select>
+          </Campo>
+          {carregando ? <Carregando texto="Buscando os grupos…" /> : grupos && (grupos.length === 0 ? <p style={{ color: 'var(--muted)', fontSize: 14 }}>Esse número não está em nenhum grupo.</p> : (
+            <>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+                <input style={{ ...inputStyle, flex: '1 1 200px' }} placeholder="Buscar grupo" value={busca} onChange={e => setBusca(e.target.value)} />
+                <button type="button" style={btn('link')} onClick={() => setSel(sel.length === grupos.length ? [] : grupos.map(g => g.jid))}>{sel.length === grupos.length ? 'Desmarcar todos' : 'Marcar todos'}</button>
+              </div>
+              <div style={{ maxHeight: 280, overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 8 }}>
+                {grupos.filter(g => g.name.toLowerCase().includes(busca.toLowerCase())).map(g => {
+                  const on = sel.includes(g.jid);
+                  return (
+                    <label key={g.jid} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderBottom: '1px solid var(--line)', cursor: 'pointer', background: on ? 'var(--verde-soft)' : 'transparent' }}>
+                      <input type="checkbox" checked={on} onChange={() => setSel(l => (on ? l.filter(x => x !== g.jid) : [...l, g.jid]))} />
+                      <span style={{ flex: 1, fontSize: 14, fontWeight: on ? 700 : 400 }}>{g.name}</span>
+                      <span style={{ fontSize: 12.5, color: 'var(--muted)' }} title={g.withPhone < g.participants ? 'Alguns participantes escondem o número no grupo' : undefined}>{g.withPhone} de {g.participants} com número</span>
+                    </label>
+                  );
+                })}
+              </div>
+              <Campo label="Colocar na categoria (opcional)" style={{ marginTop: 14, marginBottom: 0 }}>
+                <select style={inputStyle} value={cat} onChange={e => setCat(e.target.value)}>
+                  <option value="">Sem categoria</option>
+                  {cats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </Campo>
+              <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '10px 0 0', lineHeight: 1.5 }}>Dica: crie uma categoria com o nome do grupo antes, pra depois disparar só pra essas pessoas. Participantes que escondem o número no grupo não podem ser extraídos (regra do WhatsApp).</p>
+            </>
+          ))}
+        </>
+      )}
     </Modal>
   );
 }

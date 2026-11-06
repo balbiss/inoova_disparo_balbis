@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle, ArrowLeft, ArrowRight, BarChart3, CalendarClock, Check, ChevronDown, ChevronUp, Copy, ExternalLink, FileText,
-  Image as ImageIcon, Lightbulb, MessageSquareText, Mic, Phone, PhoneCall, Play, Plus, Reply, Save, ShieldCheck, Trash2, Type, Upload, UserRound, Video, X,
+  Image as ImageIcon, Lightbulb, MessageSquareText, Mic, Phone, PhoneCall, Play, Plus, Reply, Save, ShieldCheck, Trash2, Type, Upload, UserRound, UsersRound, Send, Video, X,
 } from 'lucide-react';
 import { api, erro, fmtNum, ok } from '../lib/api';
 import { Card, Carregando, btn, inputStyle } from '../components/ui';
@@ -91,7 +91,15 @@ export default function NovaCampanha() {
   const [multipla, setMultipla] = useState(false);
   const [digitando, setDigitando] = useState(true);
   const [pularSemWhats, setPularSemWhats] = useState(true);
-  const [publico, setPublico] = useState<'all' | 'cats'>('all');
+  const [publico, setPublico] = useState<'all' | 'cats' | 'grupos'>('all');
+  const [extras, setExtras] = useState<number[]>([]); // outros números (rodízio de chips)
+  const [grupos, setGrupos] = useState<{ jid: string; name: string; participants: number }[] | null>(null);
+  const [carregandoGrupos, setCarregandoGrupos] = useState(false);
+  const [gruposSel, setGruposSel] = useState<{ jid: string; name: string }[]>([]);
+  const [buscaGrupo, setBuscaGrupo] = useState('');
+  const [marcarTodos, setMarcarTodos] = useState(false);
+  const [telTeste, setTelTeste] = useState(() => { try { return localStorage.getItem('telefone_teste') || '' } catch { return '' } });
+  const [testando, setTestando] = useState(false);
   const [catsSel, setCatsSel] = useState<number[]>([]);
   const [seg, setSeg] = useState<Seg | null>(null);
   const [segAberta, setSegAberta] = useState(false);
@@ -120,10 +128,11 @@ export default function NovaCampanha() {
   const precisaMidia = kind === 'call' || !['text', 'poll'].includes(tipo);
   const usaTexto = kind === 'message' && tipo !== 'audio';
   const qtdPublico = useMemo(() => {
+    if (publico === 'grupos') return gruposSel.length;
     const bruto = publico === 'all' ? resumo.total : cats.filter(c => catsSel.includes(c.id)).reduce((s, c) => s + c.total, 0);
     if (publico === 'all') return Math.max(0, bruto - resumo.optOut - (pularSemWhats ? resumo.invalid : 0));
     return bruto;
-  }, [publico, resumo, cats, catsSel, pularSemWhats]);
+  }, [publico, resumo, cats, catsSel, pularSemWhats, gruposSel]);
   const conexao = conns?.find(c => c.id === connId);
   const totalBotoes = botoes.length + (botaoSair ? 1 : 0);
   const textoPrincipal = textos[0] || '';
@@ -169,6 +178,8 @@ export default function NovaCampanha() {
     if (p === 2) {
       if (!connId) return 'Conecte um número de WhatsApp primeiro (menu Conexões).';
       if (publico === 'cats' && !catsSel.length) return 'Escolha pelo menos uma categoria.';
+      if (publico === 'grupos' && kind === 'call') return 'Ligação não pode ser feita pra grupo. Escolha contatos.';
+      if (publico === 'grupos' && !gruposSel.length) return 'Escolha pelo menos um grupo.';
       if (!qtdPublico) return 'Nenhum contato pra receber. Importe contatos no menu Contatos.';
       return null;
     }
@@ -195,7 +206,8 @@ export default function NovaCampanha() {
         optOutButton: ehTexto && botaoSair, footer: ehTexto ? rodape : '',
         pollOptions: tipo === 'poll' ? opcoesValidas : [], pollMulti: multipla,
         typing: digitando, skipInvalid: pularSemWhats, seguranca: seg,
-        audience: publico === 'all' ? { all: true } : { categoryIds: catsSel },
+        connectionIds: extras.filter(x => x !== connId), mentionAll: publico === 'grupos' && marcarTodos,
+        audience: publico === 'all' ? { all: true } : publico === 'grupos' ? { groups: gruposSel } : { categoryIds: catsSel },
         start: false, scheduledAt: quando === 'agendar' ? new Date(agendada).toISOString() : null,
       });
       const fora = r.excluded.optOut + r.excluded.noWhatsapp;
@@ -206,6 +218,28 @@ export default function NovaCampanha() {
       } else ok((quando === 'agendar' ? 'Campanha agendada' : 'Campanha salva pra depois') + extra + '.');
       nav(`/campanhas/${r.campaign.id}`);
     } catch (e) { erro(e) } finally { setSalvando(false) }
+  };
+
+  const carregarGrupos = async () => {
+    if (!connId) return erro('Escolha o número primeiro.');
+    setCarregandoGrupos(true);
+    try { setGrupos((await api<{ groups: { jid: string; name: string; participants: number }[] }>('GET', `/connections/${connId}/groups`)).groups) }
+    catch (e) { erro(e); setPublico('all') } finally { setCarregandoGrupos(false) }
+  };
+  const enviarTeste = async () => {
+    for (const p of [1]) { const f = faltaNoPasso(p); if (f) return erro(f) }
+    if (telTeste.replace(/\D/g, '').length < 10) return erro('Digite o seu WhatsApp com DDD.');
+    try { localStorage.setItem('telefone_teste', telTeste) } catch { /* */ }
+    setTestando(true);
+    try {
+      await api('POST', '/campaigns/test', {
+        kind, connectionId: connId, messageType: kind === 'call' ? 'audio' : tipo, text: usaTexto ? textoPrincipal : '',
+        media: midia ? { path: midia.path, name: midia.name, mime: midia.mime } : null, callVideo,
+        buttons: ehTexto ? botoes.map(b => ({ type: b.type, text: b.text.trim(), value: b.value.trim() || undefined })) : [],
+        optOutButton: ehTexto && botaoSair, footer: ehTexto ? rodape : '', pollOptions: tipo === 'poll' ? opcoesValidas : [], pollMulti: multipla, phone: telTeste,
+      });
+      ok(kind === 'call' ? 'Ligando pra você agora!' : 'Teste enviado! Confira no seu WhatsApp.');
+    } catch (e) { erro(e) } finally { setTestando(false) }
   };
 
   if (!conns || !seg) return <Carregando />;
@@ -431,17 +465,59 @@ export default function NovaCampanha() {
                 <Pergunta titulo="Pra quem enviar?" texto="Escolha o seu número que vai enviar e quais contatos vão receber." />
                 <label style={{ display: 'block', marginBottom: 16 }}>
                   <span style={{ display: 'block', fontWeight: 700, fontSize: 14, marginBottom: 6 }}>Enviar pelo número</span>
-                  <select style={inputStyle} value={connId} onChange={e => setConnId(Number(e.target.value) || '')}>
+                  <select style={inputStyle} value={connId} onChange={e => { setConnId(Number(e.target.value) || ''); setGrupos(null); setGruposSel([]); if (publico === 'grupos') setPublico('all') }}>
                     {conns.length === 0 && <option value="">Nenhum número conectado</option>}
                     {conns.map(c => <option key={c.id} value={c.id}>{c.name}{c.connected ? ' — conectado' : ' — desconectado'}</option>)}
                   </select>
+                  {conns.length > 1 && (
+                    <div style={{ marginTop: 10, padding: 12, borderRadius: 8, background: 'var(--card-2)' }}>
+                      <div style={{ fontWeight: 700, fontSize: 13.5 }}>Usar mais números ao mesmo tempo <span style={{ fontWeight: 400, color: 'var(--muted)' }}>(rodízio de chips, opcional)</span></div>
+                      <div style={{ fontSize: 12.5, color: 'var(--muted)', margin: '3px 0 8px' }}>A campanha se divide entre os números: termina mais rápido e cada número envia menos (menos risco de bloqueio).</div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {conns.filter(c => c.id !== connId).map(c => {
+                          const on = extras.includes(c.id);
+                          return <button key={c.id} type="button" onClick={() => setExtras(l => (on ? l.filter(x => x !== c.id) : [...l, c.id]))}
+                            style={{ padding: '7px 12px', borderRadius: 6, border: `2px solid ${on ? 'var(--verde)' : 'var(--line)'}`, background: on ? 'var(--verde-soft)' : 'var(--card)', color: on ? 'var(--verde-escuro)' : 'var(--ink)', fontSize: 13.5, fontWeight: 700 }}>
+                            {on ? '✓ ' : ''}{c.name}{c.connected ? '' : ' (desconectado)'}</button>;
+                        })}
+                      </div>
+                    </div>
+                  )}
                   {conexao && !conexao.connected && <span style={{ display: 'block', marginTop: 6, fontSize: 13, color: '#9A6100' }}>Esse número está desconectado. Dá pra continuar: a campanha espera até você conectar em Conexões.</span>}
                 </label>
                 <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>Quem vai receber</div>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                   <Escolha ativo={publico === 'all'} onClick={() => setPublico('all')} icone={<UserRound size={20} />} titulo="Todos os contatos" texto={`${fmtNum(resumo.total)} contato(s) na sua lista.`} />
                   <Escolha ativo={publico === 'cats'} onClick={() => (cats.length ? setPublico('cats') : erro('Você ainda não tem categorias. Crie em Contatos › Categorias.'))} icone={<Check size={20} />} titulo="Só algumas categorias" texto="Ex.: só os clientes VIP." />
+                  {kind === 'message' && <Escolha ativo={publico === 'grupos'} onClick={() => { setPublico('grupos'); if (!grupos) void carregarGrupos() }} icone={<UsersRound size={20} />} titulo="Grupos do WhatsApp" texto="A mensagem vai DENTRO dos grupos que você escolher." />}
                 </div>
+                {publico === 'grupos' && (
+                  <div style={{ marginTop: 12 }}>
+                    {carregandoGrupos ? <Carregando texto="Buscando seus grupos…" /> : grupos && (
+                      <>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+                          <input style={{ ...inputStyle, flex: '1 1 200px' }} placeholder="Buscar grupo" value={buscaGrupo} onChange={e => setBuscaGrupo(e.target.value)} />
+                          <span style={{ fontSize: 13, color: 'var(--muted)' }}>{gruposSel.length} de {grupos.length} escolhido(s)</span>
+                        </div>
+                        {grupos.length === 0 ? <p style={{ color: 'var(--muted)', fontSize: 14 }}>Esse número não está em nenhum grupo.</p> : (
+                          <div style={{ maxHeight: 260, overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 8 }}>
+                            {grupos.filter(g => g.name.toLowerCase().includes(buscaGrupo.toLowerCase())).map(g => {
+                              const on = gruposSel.some(x => x.jid === g.jid);
+                              return (
+                                <label key={g.jid} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderBottom: '1px solid var(--line)', cursor: 'pointer', background: on ? 'var(--verde-soft)' : 'transparent' }}>
+                                  <input type="checkbox" checked={on} onChange={() => setGruposSel(l => (on ? l.filter(x => x.jid !== g.jid) : [...l, { jid: g.jid, name: g.name }]))} />
+                                  <span style={{ flex: 1, fontSize: 14, fontWeight: on ? 700 : 400 }}>{g.name}</span>
+                                  <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>{g.participants} pessoas</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        )}
+                        <div style={{ marginTop: 10 }}><Chave checked={marcarTodos} onChange={setMarcarTodos}>Marcar todos os participantes (@todos) — todo mundo do grupo recebe o aviso</Chave></div>
+                      </>
+                    )}
+                  </div>
+                )}
                 {publico === 'cats' && (
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
                     {cats.map(c => {
@@ -452,10 +528,10 @@ export default function NovaCampanha() {
                     })}
                   </div>
                 )}
-                <div style={{ marginTop: 16, display: 'grid', gap: 8 }}>
+                {publico !== 'grupos' && <div style={{ marginTop: 16, display: 'grid', gap: 8 }}>
                   <Chave checked={pularSemWhats} onChange={setPularSemWhats}>Não enviar pra números que não têm WhatsApp (recomendado)</Chave>
                   {resumo.optOut > 0 && <div style={{ fontSize: 13, color: 'var(--muted)', paddingLeft: 24 }}>{fmtNum(resumo.optOut)} pessoa(s) pediram pra não receber e ficam de fora automaticamente.</div>}
-                </div>
+                </div>}
                 {resumo.total === 0 && <Dica>Sua lista de contatos está vazia. <Link to="/contatos">Clique aqui pra importar seus contatos</Link> e depois volte pra cá.</Dica>}
               </>
             )}
@@ -522,7 +598,7 @@ export default function NovaCampanha() {
                 <div style={{ display: 'grid', gap: 0, border: '1px solid var(--line)', borderRadius: 8, overflow: 'hidden' }}>
                   {[
                     ['O que vai ser enviado', `${oQue[0].toUpperCase()}${oQue.slice(1)}${ehTexto && totalBotoes ? ` com ${totalBotoes} botão(ões)` : ''}${usaTexto && tipo !== 'poll' && textos.filter(t => t.trim()).length > 1 ? `, escrita de ${textos.filter(t => t.trim()).length} jeitos` : ''}.`, 1],
-                    ['Pra quem', `${fmtNum(qtdPublico)} contato(s)${publico === 'cats' ? ` das categorias ${cats.filter(c => catsSel.includes(c.id)).map(c => c.name).join(', ')}` : ''}, pelo número “${conexao?.name || '—'}”.`, 2],
+                    ['Pra quem', `${publico === 'grupos' ? `${fmtNum(qtdPublico)} grupo(s): ${gruposSel.map(g => g.name).join(', ')}${marcarTodos ? ' (marcando todos)' : ''}` : `${fmtNum(qtdPublico)} contato(s)${publico === 'cats' ? ` das categorias ${cats.filter(c => catsSel.includes(c.id)).map(c => c.name).join(', ')}` : ''}`}, pelo${extras.filter(x => x !== connId).length ? 's números' : ' número'} “${[conexao?.name, ...conns.filter(c => extras.includes(c.id) && c.id !== connId).map(c => c.name)].filter(Boolean).join('”, “')}”.`, 2],
                     ['Quando', quando === 'agora' ? 'Começa assim que você confirmar.' : quando === 'agendar' ? `Começa ${new Date(agendada).toLocaleString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}.` : 'Fica salva; você começa quando quiser.', 3],
                     ['Quanto tempo leva', `Com a proteção do número, ${estimativa}.`, 3],
                   ].map(([k, v, p], i) => (
@@ -532,6 +608,14 @@ export default function NovaCampanha() {
                       <button type="button" style={btn('link', { minHeight: 0, padding: 0, fontSize: 13 })} onClick={() => setPasso(p as number)}>Mudar</button>
                     </div>
                   ))}
+                </div>
+                <div style={{ marginTop: 16, padding: 14, borderRadius: 8, border: '1px dashed var(--verde)', background: 'var(--verde-soft)' }}>
+                  <div style={{ fontWeight: 700, fontSize: 14.5 }}>Quer ver como chega antes?</div>
+                  <div style={{ fontSize: 13, color: 'var(--muted)', margin: '3px 0 10px' }}>{kind === 'call' ? 'O sistema liga pro seu WhatsApp tocando a gravação.' : 'O sistema manda a mensagem pro seu WhatsApp, com foto e botões, igual vai chegar nos contatos.'}</div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <input style={{ ...inputStyle, flex: '1 1 200px', background: '#fff' }} value={telTeste} onChange={e => setTelTeste(e.target.value)} placeholder="Seu WhatsApp com DDD" inputMode="tel" />
+                    <button type="button" style={btn('ghost', { background: '#fff' })} disabled={testando} onClick={enviarTeste}>{kind === 'call' ? <PhoneCall size={15} /> : <Send size={15} />} {testando ? 'Enviando…' : kind === 'call' ? 'Ligar pra mim' : 'Enviar teste pra mim'}</button>
+                  </div>
                 </div>
               </>
             )}

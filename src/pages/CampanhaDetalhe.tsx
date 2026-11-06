@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import Swal from 'sweetalert2';
-import { AlertTriangle, ArrowLeft, Ban, CalendarClock, CheckCheck, Clock, Download, Hourglass, MessageCircle, MessageSquareText, Pause, PhoneCall, Play, ShieldCheck, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Ban, CalendarClock, CheckCheck, Clock, Copy, Download, Hourglass, MessageCircle, MessageSquareText, Pause, PhoneCall, Play, Repeat, ShieldCheck, Trash2 } from 'lucide-react';
 import { api, baixar, confirmar, erro, fmtData, fmtNum, fmtTel, getToken, ok } from '../lib/api';
-import { Cabecalho, Card, Carregando, Paginacao, Progresso, btn } from '../components/ui';
+import { Cabecalho, Card, Carregando, Modal, Paginacao, Progresso, btn, inputStyle } from '../components/ui';
 import { StatusAlvo, StatusCampanha, TIPO_MSG, feitos, type Stats } from '../lib/status';
 
 type Numero = { nextAt: string | null; pausedUntil: string | null; pauseReason: string | null; hora: number; dia: number; limiteHora: number; limiteDia: number; diaAquecimento: number | null };
@@ -35,6 +35,7 @@ export default function CampanhaDetalhe() {
   const [page, setPage] = useState(1);
   const [midiaUrl, setMidiaUrl] = useState<string | null>(null);
   const [, setTique] = useState(0);
+  const [reenviar, setReenviar] = useState(false);
   const per = 50;
 
   const carregar = useCallback(async () => {
@@ -103,6 +104,7 @@ export default function CampanhaDetalhe() {
         <StatusCampanha status={c.status} esperando={!!c.waitReason} />
         {botoes}
         {['draft', 'running', 'paused', 'scheduled'].includes(c.status) && <button style={btn('ghost')} onClick={() => acao('cancel', 'Campanha cancelada.', ['Cancelar a campanha?', 'Quem ainda está na fila não recebe. Não dá pra retomar depois.', 'Cancelar campanha', true])}><Ban size={15} /> Cancelar</button>}
+        <button style={btn('ghost')} onClick={() => setReenviar(true)} title="Criar outra campanha a partir desta"><Repeat size={15} /> Reenviar / Duplicar</button>
         {feitos(s) > 0 && <button style={btn('ghost')} onClick={() => baixar(`/campaigns/${c.id}/export`, `campanha-${c.id}.csv`)}><Download size={15} /> Relatório</button>}
         {!['running', 'scheduled'].includes(c.status) && <button style={btn('ghost', { padding: '0 11px' })} title="Excluir campanha" onClick={excluir}><Trash2 size={15} color="var(--perigo)" /></button>}
       </Cabecalho>
@@ -218,6 +220,7 @@ export default function CampanhaDetalhe() {
           )}
         </div>
       </div>
+      {reenviar && <Reenviar c={c} onClose={() => setReenviar(false)} onCriada={id => { setReenviar(false); nav(`/campanhas/${id}`) }} />}
     </>
   );
 }
@@ -229,4 +232,45 @@ function Aviso({ cor, icone, children }: { cor: 'amarelo' | 'azul'; icone: React
 
 function Linha({ k, v }: { k: string; v: ReactNode }) {
   return <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '6px 0', borderBottom: '1px dashed var(--line)' }}><span style={{ color: 'var(--muted)' }}>{k}</span><span style={{ fontWeight: 700, textAlign: 'right' }}>{v}</span></div>;
+}
+
+/** Cria outra campanha (rascunho) a partir desta: todos, ou só quem não respondeu / não leu / falhou. */
+function Reenviar({ c, onClose, onCriada }: { c: Campanha; onClose: () => void; onCriada: (id: number) => void }) {
+  const s = c.stats;
+  const opcoes: [string, string, string, number][] = c.kind === 'call'
+    ? [['nao_atenderam', 'Quem não atendeu', 'Liga de novo pra quem não atendeu.', s.noAnswer], ['nao_responderam', 'Quem não respondeu', 'Todos que receberam e não responderam nada.', Math.max(0, s.completed + s.noAnswer - s.replied)], ['falharam', 'Quem falhou', 'Tenta de novo quem deu erro.', s.failed], ['todos', 'Todos (duplicar)', 'Uma cópia da campanha inteira.', s.total]]
+    : [['nao_responderam', 'Quem não respondeu', 'Recebeu, mas não respondeu nada. O mais usado.', Math.max(0, s.sent - s.replied)], ['nao_leram', 'Quem não leu', 'A mensagem chegou mas não foi aberta.', Math.max(0, s.sent - s.read)], ['falharam', 'Quem falhou', 'Tenta de novo quem deu erro no envio.', s.failed], ['todos', 'Todos (duplicar)', 'Uma cópia da campanha inteira.', s.total]];
+  const [publico, setPublico] = useState(opcoes[0][0]);
+  const [trocar, setTrocar] = useState(false);
+  const [texto, setTexto] = useState(c.text);
+  const [salvando, setSalvando] = useState(false);
+  const podeTexto = c.kind === 'message' && c.messageType !== 'audio';
+  const criar = async () => {
+    setSalvando(true);
+    try {
+      const r = await api<{ campaign: { id: number }; total: number }>('POST', `/campaigns/${c.id}/duplicate`, { publico, ...(trocar && podeTexto ? { text: texto, textVariants: [] } : {}) });
+      ok(`Nova campanha criada com ${fmtNum(r.total)} contato(s). Confira e clique em Iniciar.`);
+      onCriada(r.campaign.id);
+    } catch (e) { erro(e) } finally { setSalvando(false) }
+  };
+  return (
+    <Modal title="Reenviar ou duplicar" subtitle="Cria uma campanha nova (como rascunho) a partir desta. Quem pediu pra sair fica de fora." onClose={onClose} width={540}
+      footer={<><button style={btn('ghost')} onClick={onClose}>Cancelar</button><button style={btn()} disabled={salvando} onClick={criar}><Copy size={15} /> Criar campanha</button></>}>
+      <div style={{ display: 'grid', gap: 8 }}>
+        {opcoes.map(([v, titulo, texto, n]) => (
+          <button key={v} type="button" onClick={() => setPublico(v)} disabled={!n}
+            style={{ display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left', padding: '12px 14px', borderRadius: 8, border: `2px solid ${publico === v ? 'var(--verde)' : 'var(--line)'}`, background: publico === v ? 'var(--verde-soft)' : 'var(--card)', opacity: n ? 1 : 0.5 }}>
+            <span style={{ flex: 1 }}><b style={{ display: 'block', fontSize: 14.5 }}>{titulo}</b><span style={{ fontSize: 13, color: 'var(--muted)' }}>{texto}</span></span>
+            <span style={{ fontWeight: 700, fontSize: 16, color: 'var(--verde-escuro)' }}>{fmtNum(n)}</span>
+          </button>
+        ))}
+      </div>
+      {podeTexto && (
+        <div style={{ marginTop: 14 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}><input type="checkbox" checked={trocar} onChange={e => setTrocar(e.target.checked)} /> Mudar a mensagem (recomendado pra não repetir o mesmo texto)</label>
+          {trocar && <textarea style={{ ...inputStyle, minHeight: 110, marginTop: 8, resize: 'vertical' }} value={texto} onChange={e => setTexto(e.target.value)} placeholder="Ex.: Oi {primeiro_nome}, conseguiu ver nossa mensagem?" />}
+        </div>
+      )}
+    </Modal>
+  );
 }

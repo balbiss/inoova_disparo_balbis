@@ -110,6 +110,23 @@ connectionsRouter.get('/:id/groups', async (req, res) => {
   } catch (e) { erroAstra(res, e) }
 });
 
+// participantes de um grupo (nome e telefone) — pra ver antes de extrair ou baixar a planilha
+connectionsRouter.get('/:id/groups/:jid/participants', async (req, res) => {
+  const c = await daEmpresa(req);
+  if (!c) return res.status(404).json({ error: 'Número não encontrado.' });
+  try {
+    const l = await astra<any[]>('GET', `/api/sessions/${encodeURIComponent(c.sessionId)}/groups`, undefined, { timeoutMs: 60_000 });
+    const g = (l || []).find(x => String(x.jid || x.id) === req.params.jid);
+    if (!g) return res.status(404).json({ error: 'Grupo não encontrado.' });
+    const meu = String(c.phone || '').replace(/D/g, '');
+    const participantes = (g.participants || []).map((p: any) => ({
+      name: String(p.name || ''), phone: String(p.phone || '').replace(/D/g, ''), admin: !!(p.isAdmin || p.isSuperAdmin || p.admin),
+      eu: !!meu && String(p.phone || '').replace(/D/g, '').slice(-8) === meu.slice(-8),
+    }));
+    res.json({ group: { jid: String(g.jid || g.id), name: String(g.name || g.subject || 'Grupo') }, participants: participantes });
+  } catch (e) { erroAstra(res, e) }
+});
+
 // estado + QR (a tela consulta a cada 2 s enquanto o QR está aberto)
 connectionsRouter.get('/:id/status', async (req, res) => {
   const c = await daEmpresa(req);

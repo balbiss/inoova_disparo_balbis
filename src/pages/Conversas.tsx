@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Ban, Check, CheckCheck, Clock, FileText, Loader2, MessageCircle, Mic, Paperclip, PhoneCall, Search, Send, ShieldCheck, X } from 'lucide-react';
+import { ArrowLeft, Ban, Check, CheckCheck, Clock, FileText, Loader2, MessageCircle, Mic, Paperclip, Phone, PhoneCall, Plus, Search, Send, ShieldCheck, Tag as TagIcon, Trash2, X, Zap } from 'lucide-react';
 import { api, confirmar, erro, fmtTel, getToken, ok } from '../lib/api';
-import { Carregando, Pilula, btn, inputStyle } from '../components/ui';
+import { Carregando, Modal, Pilula, btn, inputStyle } from '../components/ui';
+import { pedirLigacao } from '../components/Telefone';
 import { Avatar } from '../components/Avatar';
 
-type Resumo = { id: number; phone: string; name: string; avatarUrl: string | null; waName: string | null; lastMessageAt: string; lastPreview: string; lastFromMe: boolean; unread: number; connectionName: string | null; campaignName: string | null; optOut: boolean };
-type Detalhe = { id: number; phone: string; name: string; avatarUrl: string | null; waName: string | null; unread: number; connectionName: string; contactId: number | null; optOut: boolean; campaign: { id: number; name: string } | null };
+type Resumo = { id: number; phone: string; name: string; avatarUrl: string | null; waName: string | null; lastMessageAt: string; lastPreview: string; lastFromMe: boolean; unread: number; connectionName: string | null; campaignName: string | null; optOut: boolean; tagIds: number[] };
+type Etiqueta = { id: number; name: string; color: string; total: number };
+type RespostaRapida = { id: number; shortcut: string; text: string };
+type Detalhe = { id: number; phone: string; name: string; avatarUrl: string | null; waName: string | null; unread: number; connectionName: string; contactId: number | null; optOut: boolean; campaign: { id: number; name: string } | null; tagIds: number[] };
 type Msg = { id: number; fromMe: boolean; type: string; text: string; mediaName: string | null; mediaMime: string | null; hasMedia: boolean; status: string | null; createdAt: string; campaignId: number | null; sentByName: string | null };
 
 const hora = (d: string) => new Date(d).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
@@ -77,6 +80,10 @@ export default function Conversas() {
   const [params, setParams] = useSearchParams();
   const aberta = Number(params.get('c')) || null;
   const [filtro, setFiltro] = useState<'respondidas' | 'nao_lidas' | 'todas'>('todas');
+  const [etiquetas, setEtiquetas] = useState<Etiqueta[]>([]);
+  const [tagFiltro, setTagFiltro] = useState('');
+  const carregarEtiquetas = useCallback(() => api<{ tags: Etiqueta[] }>('GET', '/tags').then(r => setEtiquetas(r.tags)).catch(() => {}), []);
+  useEffect(() => { carregarEtiquetas() }, [carregarEtiquetas]);
   const [q, setQ] = useState('');
   const [lista, setLista] = useState<Resumo[] | null>(null);
   const [total, setTotal] = useState(0);
@@ -84,8 +91,9 @@ export default function Conversas() {
   const carregarLista = useCallback(() => {
     const p = new URLSearchParams({ filter: filtro, per: '80' });
     if (q.trim()) p.set('q', q.trim());
+    if (tagFiltro) p.set('tagId', tagFiltro);
     return api<{ conversations: Resumo[]; total: number }>('GET', '/conversations?' + p).then(r => { setLista(r.conversations); setTotal(r.total) }).catch(erro);
-  }, [filtro, q]);
+  }, [filtro, q, tagFiltro]);
 
   useEffect(() => {
     const t0 = setTimeout(carregarLista, q ? 300 : 0);
@@ -112,6 +120,12 @@ export default function Conversas() {
             <input style={{ ...inputStyle, paddingLeft: 32, background: 'var(--card-2)', border: '1px solid transparent' }} placeholder="Buscar nome ou telefone" value={q} onChange={e => setQ(e.target.value)} />
           </div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>{chip('todas', 'Todas')}{chip('nao_lidas', 'Não lidas')}{chip('respondidas', 'Responderam')}</div>
+          {etiquetas.length > 0 && (
+            <select value={tagFiltro} onChange={e => setTagFiltro(e.target.value)} aria-label="Filtrar por etiqueta" style={{ ...inputStyle, marginTop: 8, padding: '6px 10px', fontSize: 13 }}>
+              <option value="">Todas as etiquetas</option>
+              {etiquetas.map(t => <option key={t.id} value={t.id}>{t.name} ({t.total})</option>)}
+            </select>
+          )}
         </div>
         <div style={{ overflowY: 'auto', flex: 1 }}>
           {!lista ? <Carregando /> : lista.length === 0 ? (
@@ -130,6 +144,11 @@ export default function Conversas() {
                   <span style={{ flex: 1, fontSize: 13, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.lastFromMe && '✓ '}{c.lastPreview}</span>
                   {c.unread > 0 && <span style={{ minWidth: 20, height: 20, padding: '0 6px', borderRadius: 99, background: 'var(--verde)', color: '#fff', fontSize: 11.5, fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{c.unread}</span>}
                 </span>
+                {(c.tagIds?.length > 0) && (
+                  <span style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
+                    {c.tagIds.map(tid => { const t = etiquetas.find(x => x.id === tid); return t ? <span key={tid} style={{ fontSize: 10.5, fontWeight: 700, padding: '1px 7px', borderRadius: 99, background: t.color + '1F', color: t.color }}>{t.name}</span> : null })}
+                  </span>
+                )}
                 {(c.campaignName || c.optOut) && (
                   <span style={{ display: 'flex', gap: 6, marginTop: 4, fontSize: 11, color: 'var(--muted)', overflow: 'hidden', whiteSpace: 'nowrap' }}>
                     {c.optOut && <Pilula cor="vermelho">Descadastrado</Pilula>}
@@ -143,7 +162,7 @@ export default function Conversas() {
       </aside>
 
       <section className="conv-chat" style={{ minWidth: 0, minHeight: 0, height: '100%', display: 'flex', flexDirection: 'column', background: '#EFEAE2', overflow: 'hidden' }}>
-        {aberta ? <Chat key={aberta} id={aberta} onVoltar={() => abrir(null)} onMudou={carregarLista} /> : (
+        {aberta ? <Chat key={aberta} id={aberta} etiquetas={etiquetas} onVoltar={() => abrir(null)} onMudou={() => { carregarLista(); carregarEtiquetas() }} /> : (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: 30, color: 'var(--muted)', background: 'var(--card-2)' }}>
             <span style={{ width: 72, height: 72, borderRadius: 99, background: 'var(--verde-soft)', color: 'var(--verde-escuro)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}><MessageCircle size={32} /></span>
             <strong style={{ color: 'var(--ink)', fontSize: 17 }}>Respostas das suas campanhas</strong>
@@ -155,7 +174,13 @@ export default function Conversas() {
   );
 }
 
-function Chat({ id, onVoltar, onMudou }: { id: number; onVoltar: () => void; onMudou: () => void }) {
+function Chat({ id, etiquetas, onVoltar, onMudou }: { id: number; etiquetas: Etiqueta[]; onVoltar: () => void; onMudou: () => void }) {
+  const [respostas, setRespostas] = useState<RespostaRapida[]>([]);
+  const [rapidasAberto, setRapidasAberto] = useState(false);
+  const [sel, setSel] = useState(0);
+  const [tagsAberto, setTagsAberto] = useState(false);
+  const carregarRespostas = useCallback(() => api<{ quickReplies: RespostaRapida[] }>('GET', '/quick-replies').then(r => setRespostas(r.quickReplies)).catch(() => {}), []);
+  useEffect(() => { carregarRespostas() }, [carregarRespostas]);
   const [c, setC] = useState<Detalhe | null>(null);
   const [msgs, setMsgs] = useState<Msg[] | null>(null);
   const [texto, setTexto] = useState('');
@@ -235,6 +260,16 @@ function Chat({ id, onVoltar, onMudou }: { id: number; onVoltar: () => void; onM
   };
 
   if (!c || !msgs) return <Carregando />;
+  // respostas rápidas: texto começando com "/" abre a lista filtrada
+  const busca = texto.startsWith('/') && !texto.includes(' ') ? texto.slice(1).toLowerCase() : null;
+  const sugestoes = busca !== null ? respostas.filter(r => r.shortcut.includes(busca)).slice(0, 8) : [];
+  const primeiro = (c.name || c.waName || '').split(' ')[0];
+  const aplicar = (r: RespostaRapida) => { setTexto(r.text.replace(/\{primeiro_nome\}/gi, primeiro).replace(/\{nome\}/gi, c.name || c.waName || '')); setSel(0) };
+  const marcar = async (tagId: number) => {
+    const novos = c.tagIds.includes(tagId) ? c.tagIds.filter(t => t !== tagId) : [...c.tagIds, tagId];
+    setC({ ...c, tagIds: novos });
+    try { await api('PUT', `/conversations/${id}/tags`, { tagIds: novos }); onMudou() } catch (e) { erro(e) }
+  };
   let diaAnterior = '';
 
   return (
@@ -247,8 +282,31 @@ function Chat({ id, onVoltar, onMudou }: { id: number; onVoltar: () => void; onM
           <div style={{ fontSize: 12.5, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {fmtTel(c.phone)} · pelo número {c.connectionName}{c.campaign && <> · <Link to={`/campanhas/${c.campaign.id}`}>📣 {c.campaign.name}</Link></>}
           </div>
+          {c.tagIds.length > 0 && <div style={{ display: 'flex', gap: 4, marginTop: 3, flexWrap: 'wrap' }}>{c.tagIds.map(tid => { const t = etiquetas.find(x => x.id === tid); return t ? <span key={tid} style={{ fontSize: 11, fontWeight: 700, padding: '1px 8px', borderRadius: 99, background: t.color + '1F', color: t.color }}>{t.name}</span> : null })}</div>}
         </div>
         {c.optOut && <span className="esconde-mobile"><Pilula cor="vermelho">Descadastrado</Pilula></span>}
+        <div style={{ position: 'relative' }}>
+          <button onClick={() => setTagsAberto(a => !a)} title="Etiquetas" style={btn('ghost', { minHeight: 32, padding: '0 10px' })}><TagIcon size={15} /> <span className="esconde-mobile">Etiquetas{c.tagIds.length ? ` (${c.tagIds.length})` : ''}</span></button>
+          {tagsAberto && (
+            <>
+              <div onClick={() => setTagsAberto(false)} style={{ position: 'fixed', inset: 0, zIndex: 39 }} />
+              <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 40, width: 230, background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 10, padding: 6, boxShadow: '0 12px 28px rgba(11,20,26,.14)' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--muted)', padding: '6px 8px' }}>Etapa do contato</div>
+                {etiquetas.map(t => {
+                  const on = c.tagIds.includes(t.id);
+                  return (
+                    <button key={t.id} onClick={() => marcar(t.id)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '8px', border: 'none', background: on ? t.color + '14' : 'none', borderRadius: 6, fontSize: 14, textAlign: 'left' }}>
+                      <span style={{ width: 16, height: 16, borderRadius: 4, border: `2px solid ${t.color}`, background: on ? t.color : 'transparent', color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{on && <Check size={11} />}</span>
+                      {t.name}
+                    </button>
+                  );
+                })}
+                <NovaEtiqueta onCriada={onMudou} />
+              </div>
+            </>
+          )}
+        </div>
+        <button onClick={() => pedirLigacao(id)} title="Ligar pelo WhatsApp" style={btn('ghost', { minHeight: 32, padding: '0 10px' })}><Phone size={15} /> <span className="esconde-mobile">Ligar</span></button>
         <button onClick={alternarBloqueio} title={c.optOut ? 'Liberar campanhas pra este contato' : 'Não enviar mais campanhas pra este contato'} style={btn('ghost', { minHeight: 32, padding: '0 10px' })}>
           {c.optOut ? <><ShieldCheck size={15} /> <span className="esconde-mobile">Liberar</span></> : <><Ban size={15} /> <span className="esconde-mobile">Bloquear</span></>}
         </button>
@@ -296,20 +354,91 @@ function Chat({ id, onVoltar, onMudou }: { id: number; onVoltar: () => void; onM
             <button onClick={() => setAnexo(null)} aria-label="Tirar anexo" style={{ border: 'none', background: 'none', padding: 2, display: 'flex' }}><X size={16} /></button>
           </div>
         )}
+        {sugestoes.length > 0 && (
+          <div style={{ background: '#fff', borderRadius: 10, boxShadow: '0 -6px 20px rgba(11,20,26,.12)', marginBottom: 8, overflow: 'hidden', maxHeight: 260, overflowY: 'auto' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--muted)', padding: '8px 12px 4px' }}>Respostas rápidas · Enter pra usar</div>
+            {sugestoes.map((r, i) => (
+              <button key={r.id} onMouseDown={e => { e.preventDefault(); aplicar(r) }} style={{ width: '100%', display: 'block', textAlign: 'left', padding: '8px 12px', border: 'none', background: i === sel ? 'var(--verde-soft)' : 'none' }}>
+                <b style={{ color: 'var(--verde-escuro)', fontSize: 13.5 }}>/{r.shortcut}</b>
+                <span style={{ display: 'block', fontSize: 13, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.text}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
+          <button onClick={() => setRapidasAberto(true)} title="Respostas rápidas (digite / na mensagem)" aria-label="Respostas rápidas" style={{ width: 40, height: 40, borderRadius: 99, border: 'none', background: 'none', color: 'var(--muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}><Zap size={20} /></button>
           <label title="Anexar arquivo" style={{ width: 40, height: 40, borderRadius: 99, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--muted)', flex: 'none' }}>
             {subindo ? <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} /> : <Paperclip size={20} />}
             <input type="file" style={{ display: 'none' }} disabled={subindo} onChange={e => { anexar(e.target.files?.[0]); e.target.value = '' }} />
           </label>
-          <textarea value={texto} onChange={e => setTexto(e.target.value)} rows={1} placeholder={anexo ? 'Legenda (opcional)' : 'Digite uma mensagem'}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviar() } }}
+          <textarea value={texto} onChange={e => setTexto(e.target.value)} rows={1} placeholder={anexo ? 'Legenda (opcional)' : 'Digite uma mensagem ou / pra respostas rápidas'}
+            onKeyDown={e => {
+              if (sugestoes.length) {
+                if (e.key === 'ArrowDown') { e.preventDefault(); setSel(x => (x + 1) % sugestoes.length); return }
+                if (e.key === 'ArrowUp') { e.preventDefault(); setSel(x => (x - 1 + sugestoes.length) % sugestoes.length); return }
+                if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); aplicar(sugestoes[Math.min(sel, sugestoes.length - 1)]); return }
+                if (e.key === 'Escape') { setTexto(''); return }
+              }
+              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviar() }
+            }}
             style={{ ...inputStyle, flex: 1, resize: 'none', maxHeight: 140, minHeight: 40, border: 'none', borderRadius: 8, lineHeight: 1.4, padding: '10px 12px' }} />
           <button onClick={enviar} disabled={enviando || (!texto.trim() && !anexo)} aria-label="Enviar" style={{ width: 42, height: 42, borderRadius: 99, border: 'none', background: 'var(--verde)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>
             {enviando ? <Loader2 size={18} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={18} />}
           </button>
         </div>
       </footer>
+      {rapidasAberto && <GerenciarRespostas respostas={respostas} onClose={() => setRapidasAberto(false)} onMudou={carregarRespostas} onUsar={r => { aplicar(r); setRapidasAberto(false) }} />}
     </>
+  );
+}
+
+const CORES_TAG = ['#00A884', '#F5A524', '#3B82F6', '#7C5CFF', '#E5484D', '#EC4899', '#8696A0'];
+function NovaEtiqueta({ onCriada }: { onCriada: () => void }) {
+  const [nome, setNome] = useState('');
+  const [aberto, setAberto] = useState(false);
+  const criar = async () => {
+    try { await api('POST', '/tags', { name: nome, color: CORES_TAG[Math.floor(Math.random() * CORES_TAG.length)] }); setNome(''); setAberto(false); onCriada() } catch (e) { erro(e) }
+  };
+  if (!aberto) return <button onClick={() => setAberto(true)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 6, padding: 8, border: 'none', borderTop: '1px solid var(--line)', marginTop: 4, background: 'none', color: 'var(--verde-escuro)', fontSize: 13, fontWeight: 700 }}><Plus size={14} /> Nova etiqueta</button>;
+  return (
+    <div style={{ display: 'flex', gap: 6, padding: 6, borderTop: '1px solid var(--line)', marginTop: 4 }}>
+      <input autoFocus style={{ ...inputStyle, padding: '6px 8px' }} value={nome} onChange={e => setNome(e.target.value)} onKeyDown={e => e.key === 'Enter' && nome.trim() && criar()} placeholder="Nome" maxLength={40} />
+      <button onClick={criar} disabled={!nome.trim()} style={btn('primary', { minHeight: 32, padding: '0 10px' })}><Check size={14} /></button>
+    </div>
+  );
+}
+
+function GerenciarRespostas({ respostas, onClose, onMudou, onUsar }: { respostas: RespostaRapida[]; onClose: () => void; onMudou: () => void; onUsar: (r: RespostaRapida) => void }) {
+  const [atalho, setAtalho] = useState('');
+  const [texto, setTexto] = useState('');
+  const criar = async () => {
+    try { await api('POST', '/quick-replies', { shortcut: atalho, text: texto }); setAtalho(''); setTexto(''); ok('Resposta rápida criada.'); onMudou() } catch (e) { erro(e) }
+  };
+  const apagar = async (r: RespostaRapida) => {
+    if (!(await confirmar(`Apagar a resposta /${r.shortcut}?`, '', 'Apagar', true))) return;
+    try { await api('DELETE', `/quick-replies/${r.id}`); onMudou() } catch (e) { erro(e) }
+  };
+  return (
+    <Modal title="Respostas rápidas" subtitle={<>Mensagens prontas pra responder em segundos. Na conversa, digite <b>/</b> e o atalho (ex.: <b>/preco</b>). Use <b>{'{primeiro_nome}'}</b> pra colocar o nome da pessoa.</>} onClose={onClose} width={560}>
+      <div style={{ display: 'grid', gap: 8, padding: 12, background: 'var(--card-2)', borderRadius: 8, marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontWeight: 700, color: 'var(--verde-escuro)' }}>/</span>
+          <input style={{ ...inputStyle, maxWidth: 200 }} value={atalho} onChange={e => setAtalho(e.target.value)} placeholder="atalho (ex.: preco)" maxLength={40} />
+        </div>
+        <textarea style={{ ...inputStyle, minHeight: 80, resize: 'vertical' }} value={texto} onChange={e => setTexto(e.target.value)} placeholder="Ex.: Oi {primeiro_nome}! O valor é R$ 99,90 e entregamos em toda a cidade 😉" />
+        <div><button style={btn()} disabled={!atalho.trim() || !texto.trim()} onClick={criar}><Plus size={15} /> Salvar resposta</button></div>
+      </div>
+      {respostas.length === 0 ? <p style={{ color: 'var(--muted)', fontSize: 14, margin: 0 }}>Nenhuma resposta rápida ainda.</p> : respostas.map(r => (
+        <div key={r.id} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '10px 0', borderBottom: '1px dashed var(--line)' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <b style={{ color: 'var(--verde-escuro)' }}>/{r.shortcut}</b>
+            <div style={{ fontSize: 13.5, color: 'var(--muted)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{r.text}</div>
+          </div>
+          <button style={btn('ghost', { minHeight: 30, padding: '0 10px' })} onClick={() => onUsar(r)}>Usar</button>
+          <button title="Apagar" onClick={() => apagar(r)} style={{ border: 'none', background: 'none', color: 'var(--perigo)', padding: 6 }}><Trash2 size={15} /></button>
+        </div>
+      ))}
+    </Modal>
   );
 }
 

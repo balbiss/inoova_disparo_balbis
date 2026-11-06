@@ -1,6 +1,8 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Telefone } from './Telefone';
+import { notificar, somMensagem } from '../lib/som';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { Building2, ChevronUp, KeyRound, LayoutDashboard, LogOut, Megaphone, Menu, MessageCircle, PanelLeft, ShieldCheck, Smartphone, Users, UsersRound, X } from 'lucide-react';
+import { BellRing, Building2, MessagesSquare, ChevronUp, KeyRound, LayoutDashboard, LogOut, Megaphone, Menu, MessageCircle, PanelLeft, ShieldCheck, Smartphone, Users, UsersRound, X } from 'lucide-react';
 import { api, erro, getUsuario, ok, sair, salvarSessao, getToken, type Usuario } from '../lib/api';
 import { Logo, LogoMarca } from './Logo';
 import { Campo, Modal, btn, inputStyle } from './ui';
@@ -18,6 +20,7 @@ function menuDe(u: Usuario | null, naoLidas: number): Item[] {
     { to: '/campanhas', label: 'Campanhas', icon: <Megaphone size={20} /> },
     { to: '/conversas', label: 'Conversas', icon: <MessageCircle size={20} />, badge: naoLidas },
     { to: '/contatos', label: 'Contatos', icon: <UsersRound size={20} /> },
+    { to: '/grupos', label: 'Grupos', icon: <MessagesSquare size={20} /> },
     { to: '/conexoes', label: 'Conexões', icon: <Smartphone size={20} /> },
   ];
   if (u.role === 'admin') l.push({ to: '/equipe', label: 'Equipe', icon: <Users size={20} /> });
@@ -98,13 +101,25 @@ export function AppShell() {
   const [mobile, setMobile] = useState(false);
   const [senha, setSenha] = useState(false);
   const loc = useLocation();
+  const navegar = useNavigate();
+  const [permissao, setPermissao] = useState(() => ('Notification' in window ? Notification.permission : 'denied'));
   const [naoLidas, setNaoLidas] = useState(0);
   const itens = menuDe(usuario, naoLidas);
 
-  // contador de conversas não lidas no menu (a cada 10 s)
+  // contador de conversas não lidas no menu (a cada 10 s) + som e notificação quando chega resposta nova
+  const ultimoNaoLidas = useRef<number | null>(null);
   useEffect(() => {
     if (!usuario?.tenantId) return;
-    const ver = () => api<{ unread: number }>('GET', '/conversations/unread').then(r => setNaoLidas(r.unread)).catch(() => {});
+    const ver = () => api<{ unread: number }>('GET', '/conversations/unread').then(async r => {
+      setNaoLidas(r.unread);
+      if (ultimoNaoLidas.current !== null && r.unread > ultimoNaoLidas.current) {
+        somMensagem();
+        const u = await api<{ conversations: { id: number; name: string; waName: string | null; phone: string; lastPreview: string }[] }>('GET', '/conversations?filter=nao_lidas&per=10').catch(() => null);
+        const c = u?.conversations[0];
+        if (c) notificar(`💬 ${c.name || c.waName || c.phone}`, c.lastPreview, () => navegar(`/conversas?c=${c.id}`));
+      }
+      ultimoNaoLidas.current = r.unread;
+    }).catch(() => {});
     ver();
     const t = setInterval(ver, 10000);
     return () => clearInterval(t);
@@ -131,6 +146,11 @@ export function AppShell() {
         )}
         <Navegacao itens={itens} compacto={!aberto} />
         <div style={{ flex: 1 }} />
+        {usuario?.tenantId && permissao === 'default' && aberto && (
+          <button onClick={() => void Notification.requestPermission().then(p => setPermissao(p))} style={{ margin: '0 10px 8px', padding: '9px 12px', border: '1px dashed rgba(255,255,255,.3)', borderRadius: 10, background: 'none', color: 'var(--side-ink)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left' }}>
+            <BellRing size={16} /> Ativar avisos de resposta nova
+          </button>
+        )}
         <PerfilLateral usuario={usuario} compacto={!aberto} onSenha={() => setSenha(true)} />
       </aside>
 
@@ -161,6 +181,7 @@ export function AppShell() {
         </main>
       </div>
       {senha && <TrocarSenha onClose={() => setSenha(false)} />}
+      {usuario?.tenantId && <Telefone />}
     </div>
   );
 }

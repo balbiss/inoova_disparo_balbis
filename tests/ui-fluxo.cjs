@@ -195,14 +195,14 @@ async function semRolagemLateral(page, nome) {
   await page.waitForSelector('text=Tenho interesse! Qual o preço?');
   check(await page.waitForFunction(() => document.querySelector('.conv-chat')?.innerText.includes('Oi Maria!'), null, { timeout: 8000 }).then(() => true).catch(() => false), 'chat mostra a mensagem da campanha e a resposta');
   await page.waitForSelector('text=Mensagem longa número 30');
-  const caixaNaTela = async () => page.evaluate(() => { const t = document.querySelector('textarea[placeholder="Digite uma mensagem"]'); if (!t) return false; const r = t.getBoundingClientRect(); return r.bottom <= window.innerHeight && r.top > 0 && document.documentElement.scrollHeight <= window.innerHeight + 2 });
+  const caixaNaTela = async () => page.evaluate(() => { const t = document.querySelector('textarea[placeholder^="Digite uma mensagem"]'); if (!t) return false; const r = t.getBoundingClientRect(); return r.bottom <= window.innerHeight && r.top > 0 && document.documentElement.scrollHeight <= window.innerHeight + 2 });
   check(await caixaNaTela(), 'conversa longa: caixa de digitar fixa na tela, só as mensagens rolam');
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(500);
   check(await caixaNaTela(), 'celular: caixa de digitar fixa na tela');
   await page.screenshot({ path: path.join(PRINTS, 'm-conversa-longa.png') });
   await page.setViewportSize({ width: 1366, height: 860 });
-  await page.fill('textarea[placeholder="Digite uma mensagem"]', 'Oi Maria, já te passo!');
+  await page.fill('textarea[placeholder^="Digite uma mensagem"]', 'Oi Maria, já te passo!');
   await page.keyboard.press('Enter');
   check(await page.waitForSelector('.swal2-toast:has-text("desconectado")', { timeout: 8000 }).then(() => true).catch(() => false), 'responder com número desconectado avisa');
   await shot('15-conversa');

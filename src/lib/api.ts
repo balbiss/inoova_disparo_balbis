@@ -60,6 +60,7 @@ export async function confirmar(titulo: string, texto = '', botao = 'Confirmar',
 
 export const fmtData = (d: string | null | undefined) => (d ? new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—');
 export const fmtTel = (t: string | null | undefined) => {
+  if (String(t || '').endsWith('@g.us')) return 'Grupo do WhatsApp';
   const d = String(t || '').replace(/\D/g, '');
   if (d.startsWith('55') && (d.length === 12 || d.length === 13)) {
     const ddd = d.slice(2, 4), n = d.slice(4);
