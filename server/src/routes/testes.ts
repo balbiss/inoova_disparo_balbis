@@ -5,6 +5,7 @@ import { db } from '../db/client.js';
 import { campaigns, campaignTargets, connections } from '../db/schema.js';
 import { exigirEmpresa, exigirLogin, tenantDe } from '../lib/auth.js';
 import { conversaDe, gravarMensagem } from '../lib/conversas.js';
+import { montarTexto } from '../lib/telefone.js';
 
 // Rotas SÓ PARA TESTE AUTOMÁTICO (montadas apenas com ENABLE_TEST_ROUTES=1, nunca em produção):
 // simulam o que o WhatsApp faria, pra testar Conversas/relatório sem um número conectado.
@@ -28,7 +29,7 @@ testesRouter.post('/campaigns/:id/simulate-sent', async (req, res) => {
   for (const a of alvos) {
     await db.update(campaignTargets).set({ status: 'sent', astraRef: `TEST-${a.id}`, doneAt: new Date() }).where(eq(campaignTargets.id, a.id));
     const conv = await conversaDe(conn, a.phone, a.name);
-    await gravarMensagem(conv, { waId: `TEST-${a.id}`, fromMe: true, text: c.text, campaignId: c.id });
+    await gravarMensagem(conv, { waId: `TEST-${a.id}`, fromMe: true, text: montarTexto(c.text, a.name), campaignId: c.id });
   }
   if (req.body?.status) await db.update(campaigns).set({ status: req.body.status }).where(eq(campaigns.id, c.id));
   res.json({ refs: alvos.map(a => ({ phone: a.phone, ref: `TEST-${a.id}` })) });

@@ -3,9 +3,10 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Ban, Check, CheckCheck, Clock, FileText, Loader2, MessageCircle, Mic, Paperclip, PhoneCall, Search, Send, ShieldCheck, X } from 'lucide-react';
 import { api, confirmar, erro, fmtTel, getToken, ok } from '../lib/api';
 import { Carregando, Pilula, btn, inputStyle } from '../components/ui';
+import { Avatar } from '../components/Avatar';
 
-type Resumo = { id: number; phone: string; name: string; lastMessageAt: string; lastPreview: string; lastFromMe: boolean; unread: number; connectionName: string | null; campaignName: string | null; optOut: boolean };
-type Detalhe = { id: number; phone: string; name: string; unread: number; connectionName: string; contactId: number | null; optOut: boolean; campaign: { id: number; name: string } | null };
+type Resumo = { id: number; phone: string; name: string; avatarUrl: string | null; waName: string | null; lastMessageAt: string; lastPreview: string; lastFromMe: boolean; unread: number; connectionName: string | null; campaignName: string | null; optOut: boolean };
+type Detalhe = { id: number; phone: string; name: string; avatarUrl: string | null; waName: string | null; unread: number; connectionName: string; contactId: number | null; optOut: boolean; campaign: { id: number; name: string } | null };
 type Msg = { id: number; fromMe: boolean; type: string; text: string; mediaName: string | null; mediaMime: string | null; hasMedia: boolean; status: string | null; createdAt: string; campaignId: number | null; sentByName: string | null };
 
 const hora = (d: string) => new Date(d).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
@@ -22,7 +23,6 @@ const diaLabel = (d: string) => {
   if (dt.toDateString() === new Date(Date.now() - 86400_000).toDateString()) return 'Ontem';
   return dt.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
 };
-const iniciais = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map(p => p[0]).join('').toUpperCase() || '#';
 
 /** Formatação do WhatsApp (*negrito*, _itálico_, ~riscado~) com o texto escapado antes. */
 function formatar(t: string) {
@@ -120,10 +120,10 @@ export default function Conversas() {
             </div>
           ) : lista.map(c => (
             <button key={c.id} onClick={() => abrir(c.id)} style={{ width: '100%', display: 'flex', gap: 11, padding: '11px 14px', border: 'none', borderBottom: '1px solid var(--line)', background: c.id === aberta ? '#F0F2F5' : 'var(--card)', textAlign: 'left', alignItems: 'center' }}>
-              <span style={{ width: 44, height: 44, borderRadius: 99, background: c.optOut ? '#EEF1F2' : 'var(--verde-soft)', color: c.optOut ? 'var(--muted)' : 'var(--verde-escuro)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 14, flex: 'none' }}>{iniciais(c.name)}</span>
+              <Avatar url={c.avatarUrl} nome={c.name || c.waName || ''} apagado={c.optOut} />
               <span style={{ flex: 1, minWidth: 0 }}>
                 <span style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                  <span style={{ flex: 1, fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name || fmtTel(c.phone)}</span>
+                  <span style={{ flex: 1, fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name || c.waName || fmtTel(c.phone)}{!c.name && c.waName && <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 12.5 }}> · {fmtTel(c.phone)}</span>}</span>
                   <span style={{ fontSize: 12, color: c.unread ? 'var(--verde)' : 'var(--muted)', fontWeight: c.unread ? 700 : 400 }}>{quando(c.lastMessageAt)}</span>
                 </span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
@@ -241,9 +241,9 @@ function Chat({ id, onVoltar, onMudou }: { id: number; onVoltar: () => void; onM
     <>
       <header style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '10px 14px', background: 'var(--card)', borderBottom: '1px solid var(--line)' }}>
         <button className="so-mobile" onClick={onVoltar} aria-label="Voltar" style={{ border: 'none', background: 'none', padding: 4, alignItems: 'center' }}><ArrowLeft size={20} /></button>
-        <span style={{ width: 40, height: 40, borderRadius: 99, background: 'var(--verde-soft)', color: 'var(--verde-escuro)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, flex: 'none' }}>{iniciais(c.name)}</span>
+        <Avatar url={c.avatarUrl} nome={c.name || c.waName || ''} size={40} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name || fmtTel(c.phone)}</div>
+          <div style={{ fontWeight: 700, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name || c.waName || fmtTel(c.phone)}{c.waName && c.name && c.waName !== c.name && <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 12.5 }}> · ~{c.waName}</span>}</div>
           <div style={{ fontSize: 12.5, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {fmtTel(c.phone)} · pelo número {c.connectionName}{c.campaign && <> · <Link to={`/campanhas/${c.campaign.id}`}>📣 {c.campaign.name}</Link></>}
           </div>

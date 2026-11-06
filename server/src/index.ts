@@ -14,6 +14,7 @@ import { dashboardRouter } from './routes/dashboard.js';
 import { iniciarEventosAstra } from './lib/astra.js';
 import { iniciarWorker } from './lib/worker.js';
 import { iniciarSaude } from './lib/saude.js';
+import { juntarConversasDuplicadas } from './lib/conversas.js';
 import { webhooksRouter } from './routes/webhooks.js';
 import { conversationsRouter } from './routes/conversations.js';
 
@@ -63,6 +64,7 @@ async function iniciar() {
       await new Promise(r => setTimeout(r, 2000));
     }
   }
+  await juntarConversasDuplicadas().catch(e => console.warn('[conversas] juntar duplicadas:', (e as Error).message));
   iniciarEventosAstra();
   iniciarWorker();
   iniciarSaude();

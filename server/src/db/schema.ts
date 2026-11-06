@@ -154,6 +154,10 @@ export const conversations = pgTable('conversations', {
   lastFromMe: boolean('last_from_me').notNull().default(true),
   lastInboundAt: timestamp('last_inbound_at', { withTimezone: true }),
   unread: integer('unread').notNull().default(0),
+  // foto e nome do perfil no WhatsApp (atualizados a cada 12 h)
+  avatarUrl: text('avatar_url'),
+  waName: text('wa_name'),
+  profileAt: timestamp('profile_at', { withTimezone: true }),
 }, t => [uniqueIndex('conversations_conn_phone_uq').on(t.connectionId, t.phone), index('conversations_tenant_idx').on(t.tenantId, t.lastMessageAt)]);
 
 // status (enviadas): sent | delivered | read | failed

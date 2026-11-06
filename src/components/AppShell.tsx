@@ -1,18 +1,22 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { Building2, ChevronDown, KeyRound, LayoutDashboard, LogOut, Megaphone, Menu, PanelLeft, Smartphone, Users, UsersRound, X } from 'lucide-react';
+import { Building2, ChevronDown, KeyRound, LayoutDashboard, LogOut, Megaphone, Menu, MessageCircle, PanelLeft, ShieldCheck, Smartphone, Users, UsersRound, X } from 'lucide-react';
 import { api, erro, getUsuario, ok, sair, salvarSessao, getToken, type Usuario } from '../lib/api';
 import { Logo, LogoMarca } from './Logo';
 import { Campo, Modal, btn, inputStyle } from './ui';
 
-type Item = { to: string; label: string; icon: ReactNode };
+type Item = { to: string; label: string; icon: ReactNode; badge?: number };
 
-function menuDe(u: Usuario | null): Item[] {
+function menuDe(u: Usuario | null, naoLidas: number): Item[] {
   if (!u) return [];
-  if (u.role === 'superadmin') return [{ to: '/empresas', label: 'Empresas', icon: <Building2 size={20} /> }];
+  if (u.role === 'superadmin') return [
+    { to: '/empresas', label: 'Empresas', icon: <Building2 size={20} /> },
+    { to: '/seguranca', label: 'Segurança', icon: <ShieldCheck size={20} /> },
+  ];
   const l: Item[] = [
     { to: '/painel', label: 'Painel', icon: <LayoutDashboard size={20} /> },
     { to: '/campanhas', label: 'Campanhas', icon: <Megaphone size={20} /> },
+    { to: '/conversas', label: 'Conversas', icon: <MessageCircle size={20} />, badge: naoLidas },
     { to: '/contatos', label: 'Contatos', icon: <UsersRound size={20} /> },
     { to: '/conexoes', label: 'Conexões', icon: <Smartphone size={20} /> },
   ];
@@ -34,7 +38,10 @@ function Navegacao({ itens, compacto, onClick }: { itens: Item[]; compacto: bool
             boxShadow: isActive ? 'inset 3px 0 0 #25D366' : undefined,
           })}>
           {i.icon}
-          {!compacto && <span>{i.label}</span>}
+          {!compacto && <span style={{ flex: 1 }}>{i.label}</span>}
+          {!!i.badge && (
+            <span style={{ position: compacto ? 'absolute' : 'static', top: 4, right: 10, minWidth: 20, height: 20, padding: '0 6px', borderRadius: 99, background: '#25D366', color: '#073B33', fontSize: 11.5, fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{i.badge > 99 ? '99+' : i.badge}</span>
+          )}
         </NavLink>
       ))}
     </nav>
@@ -48,7 +55,17 @@ export function AppShell() {
   const [perfil, setPerfil] = useState(false);
   const [senha, setSenha] = useState(false);
   const loc = useLocation();
-  const itens = menuDe(usuario);
+  const [naoLidas, setNaoLidas] = useState(0);
+  const itens = menuDe(usuario, naoLidas);
+
+  // contador de conversas não lidas no menu (a cada 10 s)
+  useEffect(() => {
+    if (!usuario?.tenantId) return;
+    const ver = () => api<{ unread: number }>('GET', '/conversations/unread').then(r => setNaoLidas(r.unread)).catch(() => {});
+    ver();
+    const t = setInterval(ver, 10000);
+    return () => clearInterval(t);
+  }, [usuario?.tenantId, loc.pathname]);
 
   // atualiza o perfil ao abrir (limites da empresa / papel podem mudar)
   useEffect(() => {

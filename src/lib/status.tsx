@@ -1,23 +1,29 @@
 import { Pilula } from '../components/ui';
 
-export const STATUS_CAMPANHA: Record<string, { label: string; cor: 'verde' | 'cinza' | 'amarelo' | 'vermelho' | 'azul' }> = {
+type Cor = 'verde' | 'cinza' | 'amarelo' | 'vermelho' | 'azul';
+
+export const STATUS_CAMPANHA: Record<string, { label: string; cor: Cor }> = {
   draft: { label: 'Rascunho', cor: 'cinza' },
+  scheduled: { label: 'Agendada', cor: 'azul' },
   running: { label: 'Enviando', cor: 'verde' },
   paused: { label: 'Pausada', cor: 'amarelo' },
   done: { label: 'Concluída', cor: 'azul' },
   canceled: { label: 'Cancelada', cor: 'vermelho' },
 };
 
-export function StatusCampanha({ status }: { status: string }) {
+export function StatusCampanha({ status, esperando }: { status: string; esperando?: boolean }) {
   const s = STATUS_CAMPANHA[status] || { label: status, cor: 'cinza' as const };
+  if (status === 'running' && esperando) return <Pilula cor="amarelo">Aguardando</Pilula>;
   return <Pilula cor={s.cor} pulsando={status === 'running'}>{s.label}</Pilula>;
 }
 
-export const STATUS_ALVO: Record<string, { label: string; cor: 'verde' | 'cinza' | 'amarelo' | 'vermelho' | 'azul' }> = {
+export const STATUS_ALVO: Record<string, { label: string; cor: Cor }> = {
   pending: { label: 'Na fila', cor: 'cinza' },
   sending: { label: 'Enviando', cor: 'amarelo' },
+  warming: { label: 'Msg. enviada, vai ligar', cor: 'azul' },
   sent: { label: 'Enviada', cor: 'verde' },
   failed: { label: 'Falhou', cor: 'vermelho' },
+  skipped: { label: 'Pulado', cor: 'cinza' },
   ringing: { label: 'Chamando', cor: 'amarelo' },
   answered: { label: 'Em ligação', cor: 'azul' },
   completed: { label: 'Atendeu', cor: 'verde' },
@@ -29,7 +35,10 @@ export function StatusAlvo({ status }: { status: string }) {
   return <Pilula cor={s.cor} pulsando={status === 'ringing' || status === 'answered' || status === 'sending'}>{s.label}</Pilula>;
 }
 
-export const TIPO_MSG: Record<string, string> = { text: 'Texto', image: 'Imagem', video: 'Vídeo', audio: 'Áudio', document: 'Documento' };
+export const TIPO_MSG: Record<string, string> = { text: 'Texto', image: 'Imagem', video: 'Vídeo', audio: 'Áudio', document: 'Documento', poll: 'Enquete' };
 
-export type Stats = { total: number; pending: number; sent: number; failed: number; completed: number; noAnswer: number };
+export type Stats = {
+  total: number; pending: number; sent: number; failed: number; skipped: number; completed: number; noAnswer: number;
+  delivered: number; read: number; replied: number; optedOut: number;
+};
 export const feitos = (s: Stats) => s.total - s.pending;

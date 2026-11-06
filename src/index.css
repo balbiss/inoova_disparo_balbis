@@ -35,7 +35,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(0,168,132,.3
 .tabela tr:hover td { background: #F8FAF9; }
 .linha-click { cursor: pointer; }
 
-.grid-kpi { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.grid-kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
 .grid-2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
 .grid-camp { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 18px; align-items: start; }
 

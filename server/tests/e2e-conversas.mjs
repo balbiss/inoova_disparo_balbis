@@ -58,14 +58,16 @@ check(await webhook('message', { id: 'IN1', chat: '5591988887777@s.whatsapp.net'
 await webhook('message', { id: 'IN1', chat: '5591988887777@s.whatsapp.net', chatPhone: '5591988887777', fromMe: false, type: 'text', text: 'Quero saber mais', timestamp: Date.now() });
 await webhook('message', { id: 'G1', chat: '120363@g.us', isGroup: true, fromMe: false, type: 'text', text: 'grupo' });
 
+// WhatsApp devolve a resposta SEM o 9º dígito: tem que cair na mesma conversa
+await webhook('message', { id: 'IN1b', chat: '559188887777@s.whatsapp.net', chatPhone: '559188887777', fromMe: false, type: 'text', text: 'Mandei sem o 9', timestamp: Date.now() });
 let lista = (await call(A, 'GET', '/conversations')).j;
-check(lista.total === 1 && lista.conversations[0].name === 'Maria Silva' && lista.conversations[0].unread === 1, 'Conversas mostra só quem respondeu (Maria, 1 não lida, sem duplicar, sem grupo)', lista);
+check(lista.total === 1 && lista.conversations[0].name === 'Maria Silva' && lista.conversations[0].unread === 2, 'Conversas mostra só quem respondeu (Maria, sem duplicar mesmo SEM o 9, sem grupo)', lista);
 const todas = (await call(A, 'GET', '/conversations?filter=todas')).j;
 check(todas.total === 3, 'filtro "todas" mostra as 3 conversas da campanha', todas.total);
 check((await call(A, 'GET', '/conversations/unread')).j.unread === 1, 'contador de não lidas = 1');
 const convMaria = lista.conversations[0];
 const msgs = (await call(A, 'GET', `/conversations/${convMaria.id}/messages`)).j.messages;
-check(msgs.length === 2 && msgs[0].fromMe && msgs[1].text === 'Quero saber mais', 'histórico tem a mensagem da campanha e a resposta, em ordem', msgs);
+check(msgs.length === 3 && msgs[0].fromMe && msgs[1].text === 'Quero saber mais' && msgs[2].text === 'Mandei sem o 9', 'histórico tem a campanha e as respostas (com e sem o 9), em ordem', msgs);
 const det = (await call(A, 'GET', `/conversations/${convMaria.id}`)).j.conversation;
 check(det.campaign?.name === promo.name && det.contactId, 'conversa mostra a campanha e o contato', det);
 

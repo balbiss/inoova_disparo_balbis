@@ -6,7 +6,7 @@ import { db } from '../db/client.js';
 import { campaigns, connections, contacts, conversations, messages, users } from '../db/schema.js';
 import { exigirEmpresa, exigirLogin, tenantDe } from '../lib/auth.js';
 import { astra, AstraErro } from '../lib/astra.js';
-import { descadastrar, gravarMensagem } from '../lib/conversas.js';
+import { atualizarPerfil, descadastrar, gravarMensagem, mesmoTelefone } from '../lib/conversas.js';
 import { arquivoUpload, base64DoUpload } from '../lib/uploads.js';
 
 export const conversationsRouter = Router();
@@ -38,12 +38,18 @@ conversationsRouter.get('/', async (req, res) => {
     id: conversations.id, phone: conversations.phone, name: sql<string>`coalesce(nullif(${contacts.name}, ''), ${conversations.name})`,
     lastMessageAt: conversations.lastMessageAt, lastPreview: conversations.lastPreview, lastFromMe: conversations.lastFromMe, unread: conversations.unread,
     connectionName: connections.name, campaignName: campaigns.name, optOut: sql<boolean>`coalesce(${contacts.optOut}, false)`,
+    avatarUrl: conversations.avatarUrl, waName: conversations.waName, profileAt: conversations.profileAt,
   }).from(conversations)
     .leftJoin(contacts, eq(contacts.id, conversations.contactId))
     .leftJoin(connections, eq(connections.id, conversations.connectionId))
     .leftJoin(campaigns, eq(campaigns.id, conversations.lastCampaignId))
     .where(where).orderBy(desc(conversations.lastMessageAt)).limit(per).offset((page - 1) * per);
-  res.json({ conversations: l, total, page, per });
+  // foto/nome de quem ainda não tem (ou está velho): busca em segundo plano, aparece na próxima atualização
+  const velhas = l.filter(c => !c.profileAt || Date.now() - new Date(c.profileAt).getTime() > 12 * 3600_000).slice(0, 8);
+  if (velhas.length) void (async () => {
+    for (const v of velhas) { const [c] = await db.select().from(conversations).where(eq(conversations.id, v.id)); if (c) await atualizarPerfil(c).catch(() => {}) }
+  })();
+  res.json({ conversations: l.map(({ profileAt: _p, ...c }) => c), total, page, per });
 });
 
 conversationsRouter.get('/unread', async (req, res) => {
@@ -57,13 +63,14 @@ conversationsRouter.get('/:id', async (req, res) => {
   // vincula ao contato se ele foi cadastrado depois
   let contato = c.contactId ? (await db.select().from(contacts).where(eq(contacts.id, c.contactId)))[0] : undefined;
   if (!contato) {
-    [contato] = await db.select().from(contacts).where(and(eq(contacts.tenantId, c.tenantId), eq(contacts.phone, c.phone)));
+    [contato] = await db.select().from(contacts).where(and(eq(contacts.tenantId, c.tenantId), mesmoTelefone(contacts.phone, c.phone))).limit(1);
     if (contato) await db.update(conversations).set({ contactId: contato.id }).where(eq(conversations.id, c.id));
   }
+  const perfil = await atualizarPerfil(c).catch(() => c);
   const [conn] = await db.select({ name: connections.name, phone: connections.phone }).from(connections).where(eq(connections.id, c.connectionId));
   const [camp] = c.lastCampaignId ? await db.select({ id: campaigns.id, name: campaigns.name }).from(campaigns).where(eq(campaigns.id, c.lastCampaignId)) : [];
   res.json({ conversation: {
-    id: c.id, phone: c.phone, name: contato?.name || c.name, unread: c.unread, connectionName: conn?.name, connectionPhone: conn?.phone,
+    id: c.id, phone: c.phone, name: contato?.name || c.name || perfil.waName || '', waName: perfil.waName, avatarUrl: perfil.avatarUrl, unread: c.unread, connectionName: conn?.name, connectionPhone: conn?.phone,
     contactId: contato?.id ?? null, optOut: !!contato?.optOut, campaign: camp ?? null,
   } });
 });
@@ -156,8 +163,8 @@ conversationsRouter.post('/:id/optout', async (req, res) => {
   const c = await daEmpresa(req);
   if (!c) return res.status(404).json({ error: 'Conversa não encontrada.' });
   if (req.body?.optOut) await descadastrar(c.tenantId, c.phone, c.name);
-  else await db.update(contacts).set({ optOut: false, optOutAt: null }).where(and(eq(contacts.tenantId, c.tenantId), eq(contacts.phone, c.phone)));
-  const [contato] = await db.select({ id: contacts.id }).from(contacts).where(and(eq(contacts.tenantId, c.tenantId), eq(contacts.phone, c.phone)));
+  else await db.update(contacts).set({ optOut: false, optOutAt: null }).where(and(eq(contacts.tenantId, c.tenantId), mesmoTelefone(contacts.phone, c.phone)));
+  const [contato] = await db.select({ id: contacts.id }).from(contacts).where(and(eq(contacts.tenantId, c.tenantId), mesmoTelefone(contacts.phone, c.phone))).limit(1);
   if (contato && !c.contactId) await db.update(conversations).set({ contactId: contato.id }).where(eq(conversations.id, c.id));
   res.json({ ok: true });
 });

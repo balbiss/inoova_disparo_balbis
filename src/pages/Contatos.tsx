@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FileUp, Plus, Search, Tags, Trash2, UsersRound, Pencil } from 'lucide-react';
+import { FileUp, Plus, Search, Tags, Trash2, UsersRound, Pencil, ShieldCheck, Square } from 'lucide-react';
 import { api, confirmar, erro, fmtData, fmtNum, fmtTel, getUsuario, ok } from '../lib/api';
-import { Cabecalho, Campo, Carregando, Modal, Paginacao, Vazio, btn, inputStyle } from '../components/ui';
+import { Cabecalho, Campo, Carregando, Modal, Paginacao, Pilula, Progresso, Vazio, btn, inputStyle } from '../components/ui';
 import { lerCsv, lerLista, mapearColunas } from '../lib/planilha';
 
 type Categoria = { id: number; name: string; color: string; total: number };
-type Contato = { id: number; name: string; phone: string; categoryId: number | null; createdAt: string };
+type Contato = { id: number; name: string; phone: string; categoryId: number | null; optOut: boolean; waStatus: 'unknown' | 'valid' | 'invalid'; createdAt: string };
+type Validacao = { total: number; feitos: number; validos: number; invalidos: number; rodando: boolean; erro?: string };
 
 const CORES = ['#128C7E', '#25D366', '#34B7F1', '#7C5CFF', '#F5A524', '#E5484D', '#EC4899', '#54656F'];
 
@@ -19,6 +20,8 @@ export default function Contatos() {
   const [dados, setDados] = useState<{ contacts: Contato[]; total: number } | null>(null);
   const [q, setQ] = useState('');
   const [cat, setCat] = useState('');
+  const [situacao, setSituacao] = useState('');
+  const [val, setVal] = useState<Validacao | null>(null);
   const [page, setPage] = useState(1);
   const [sel, setSel] = useState<Set<number>>(new Set());
   const [editar, setEditar] = useState<Contato | 'novo' | null>(null);
@@ -33,12 +36,35 @@ export default function Contatos() {
     const p = new URLSearchParams({ page: String(page), per: String(per) });
     if (q.trim()) p.set('q', q.trim());
     if (cat) p.set('category', cat);
+    if (situacao) p.set('situacao', situacao);
     return api<{ contacts: Contato[]; total: number }>('GET', '/contacts?' + p).then(setDados).catch(erro);
-  }, [page, q, cat]);
+  }, [page, q, cat, situacao]);
 
   useEffect(() => { carregarCats() }, [carregarCats]);
+  // validação no WhatsApp em segundo plano: acompanha o progresso
+  useEffect(() => {
+    let vivo = true;
+    const ver = () => api<{ progress: Validacao | null }>('GET', '/contacts/validate').then(r => {
+      if (!vivo) return;
+      setVal(v => {
+        if (v?.rodando && r.progress && !r.progress.rodando) {
+          carregar();
+          if (r.progress.erro) erro(r.progress.erro); else ok(`Validação concluída: ${r.progress.validos} com WhatsApp, ${r.progress.invalidos} sem.`);
+        }
+        return r.progress;
+      });
+    }).catch(() => {});
+    ver();
+    const t = setInterval(ver, 3000);
+    return () => { vivo = false; clearInterval(t) };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { clearTimeout(busca.current); busca.current = setTimeout(carregar, q ? 300 : 0); return () => clearTimeout(busca.current) }, [carregar, q]);
-  useEffect(() => { setSel(new Set()) }, [page, q, cat]);
+  useEffect(() => { setSel(new Set()) }, [page, q, cat, situacao]);
+
+  const validar = async () => {
+    if (!(await confirmar('Validar os números no WhatsApp?', 'Confere quem tem WhatsApp, devagar (cerca de 1 por segundo) pra não chamar atenção. Só os que ainda não foram validados. Precisa de um número conectado.', 'Validar'))) return;
+    try { const r = await api<{ progress: Validacao }>('POST', '/contacts/validate', { q, category: cat, situacao }); setVal(r.progress); ok('Validação iniciada.') } catch (e) { erro(e) }
+  };
 
   const recarregarTudo = () => { carregar(); carregarCats() };
   const catDe = (id: number | null) => cats.find(c => c.id === id);
@@ -50,19 +76,28 @@ export default function Contatos() {
   };
   const excluirFiltro = async () => {
     if (!dados) return;
-    const desc = q || cat ? 'todos os contatos deste filtro' : 'TODOS os seus contatos';
+    const desc = q || cat || situacao ? 'todos os contatos deste filtro' : 'TODOS os seus contatos';
     if (!(await confirmar(`Excluir ${fmtNum(dados.total)} contato(s)?`, `Isso apaga ${desc}. Não dá pra desfazer.`, 'Excluir tudo', true))) return;
-    try { const r = await api<{ deleted: number }>('POST', '/contacts/delete', { all: true, q, category: cat }); ok(`${r.deleted} contato(s) excluído(s).`); setPage(1); recarregarTudo() } catch (e) { erro(e) }
+    try { const r = await api<{ deleted: number }>('POST', '/contacts/delete', { all: true, q, category: cat, situacao }); ok(`${r.deleted} contato(s) excluído(s).`); setPage(1); recarregarTudo() } catch (e) { erro(e) }
   };
 
   return (
     <>
       <Cabecalho titulo="Contatos" contagem={dados ? `${fmtNum(dados.total)}${limite ? ' de ' + fmtNum(limite) : ''}` : undefined}>
+        <button style={btn('ghost')} onClick={validar} disabled={!!val?.rodando || !dados?.total}><ShieldCheck size={16} /> Validar números</button>
         <button style={btn('ghost')} onClick={() => setGerenciar(true)}><Tags size={16} /> Categorias</button>
         <button style={btn('ghost')} onClick={() => setImportar(true)}><FileUp size={16} /> Importar</button>
         <button style={btn()} onClick={() => setEditar('novo')}><Plus size={16} /> Novo contato</button>
       </Cabecalho>
 
+      {val?.rodando && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '10px 16px', background: 'var(--verde-soft)', border: '1px solid #BDE9D6', borderRadius: 4, marginBottom: 12, fontSize: 14, flexWrap: 'wrap' }}>
+          <ShieldCheck size={18} color="var(--verde-escuro)" />
+          <span>Validando no WhatsApp: <b>{val.feitos}</b> de {val.total} · {val.validos} com WhatsApp · {val.invalidos} sem</span>
+          <div style={{ flex: '1 1 160px' }}><Progresso valor={val.feitos} total={val.total} /></div>
+          <button style={btn('ghost', { minHeight: 30 })} onClick={() => api('POST', '/contacts/validate/stop').catch(erro)}><Square size={13} /> Parar</button>
+        </div>
+      )}
       <div style={{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 4 }}>
         <div className="toolbar" style={{ display: 'flex', gap: 10, padding: 12, borderBottom: '1px solid var(--line)', alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ position: 'relative', flex: '1 1 260px' }}>
@@ -74,13 +109,20 @@ export default function Contatos() {
             <option value="none">Sem categoria</option>
             {cats.map(c => <option key={c.id} value={c.id}>{c.name} ({c.total})</option>)}
           </select>
+          <select style={{ ...inputStyle, width: 200 }} value={situacao} onChange={e => { setSituacao(e.target.value); setPage(1) }}>
+            <option value="">Todas as situações</option>
+            <option value="valid">Com WhatsApp</option>
+            <option value="invalid">Sem WhatsApp</option>
+            <option value="unknown">Não validados</option>
+            <option value="optout">Descadastrados</option>
+          </select>
           {sel.size > 0
             ? <button style={btn('danger')} onClick={excluirSel}><Trash2 size={15} /> Excluir {sel.size}</button>
             : dados && dados.total > 0 && <button style={btn('link', { color: 'var(--perigo)' })} onClick={excluirFiltro}>Excluir todos</button>}
         </div>
 
         {!dados ? <Carregando /> : dados.contacts.length === 0 ? (
-          q || cat ? <Vazio icone={<Search size={24} />} titulo="Nenhum contato encontrado" texto="Tente outro nome, telefone ou categoria." />
+          q || cat || situacao ? <Vazio icone={<Search size={24} />} titulo="Nenhum contato encontrado" texto="Tente outro nome, telefone ou categoria." />
             : <Vazio icone={<UsersRound size={26} />} titulo="Sua lista está vazia" texto="Importe uma planilha (CSV) ou cole uma lista de nomes e telefones pra começar."
               acao={<button style={btn()} onClick={() => setImportar(true)}><FileUp size={16} /> Importar contatos</button>} />
         ) : (
@@ -89,14 +131,15 @@ export default function Contatos() {
               <table className="tabela">
                 <thead><tr>
                   <th style={{ width: 36 }}><input type="checkbox" aria-label="Selecionar todos" checked={todosSel} onChange={() => setSel(todosSel ? new Set() : new Set(dados.contacts.map(c => c.id)))} /></th>
-                  <th>Nome</th><th>Telefone</th><th>Categoria</th><th className="esconde-mobile">Cadastrado em</th><th style={{ width: 40 }} />
+                  <th>Nome</th><th>Telefone</th><th>WhatsApp</th><th>Categoria</th><th className="esconde-mobile">Cadastrado em</th><th style={{ width: 40 }} />
                 </tr></thead>
                 <tbody>
                   {dados.contacts.map(c => (
                     <tr key={c.id}>
                       <td><input type="checkbox" aria-label={`Selecionar ${c.name}`} checked={sel.has(c.id)} onChange={() => setSel(s => { const n = new Set(s); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n })} /></td>
-                      <td style={{ fontWeight: 700, color: '#1D5FC2' }}>{c.name || <span style={{ color: 'var(--muted)', fontWeight: 400 }}>Sem nome</span>}</td>
+                      <td style={{ fontWeight: 700, color: '#1D5FC2' }}>{c.name || <span style={{ color: 'var(--muted)', fontWeight: 400 }}>Sem nome</span>}{c.optOut && <span style={{ marginLeft: 8 }}><Pilula cor="vermelho">Descadastrado</Pilula></span>}</td>
                       <td style={{ whiteSpace: 'nowrap' }}>{fmtTel(c.phone)}</td>
+                      <td>{c.waStatus === 'valid' ? <Pilula cor="verde">Tem</Pilula> : c.waStatus === 'invalid' ? <Pilula cor="vermelho">Não tem</Pilula> : <span style={{ color: 'var(--muted)', fontSize: 13 }}>—</span>}</td>
                       <td><TagCategoria c={catDe(c.categoryId)} /></td>
                       <td className="esconde-mobile" style={{ color: 'var(--muted)', fontSize: 13 }}>{fmtData(c.createdAt)}</td>
                       <td><button title="Editar" onClick={() => setEditar(c)} style={{ border: 'none', background: 'none', color: 'var(--muted)', padding: 4, display: 'flex' }}><Pencil size={15} /></button></td>
@@ -121,10 +164,11 @@ function EditarContato({ contato, cats, onClose, onSalvo }: { contato: Contato |
   const [nome, setNome] = useState(contato?.name || '');
   const [tel, setTel] = useState(contato ? fmtTel(contato.phone) : '');
   const [cat, setCat] = useState<string>(contato?.categoryId ? String(contato.categoryId) : '');
+  const [optOut, setOptOut] = useState(!!contato?.optOut);
   const [salvando, setSalvando] = useState(false);
   const salvar = async () => {
     setSalvando(true);
-    const corpo = { name: nome, phone: tel, categoryId: cat ? Number(cat) : null };
+    const corpo = { name: nome, phone: tel, categoryId: cat ? Number(cat) : null, ...(contato ? { optOut } : {}) };
     try {
       if (contato) await api('PATCH', `/contacts/${contato.id}`, corpo); else await api('POST', '/contacts', corpo);
       ok(contato ? 'Contato salvo.' : 'Contato criado.'); onSalvo();
@@ -149,6 +193,7 @@ function EditarContato({ contato, cats, onClose, onSalvo }: { contato: Contato |
           {cats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
       </Campo>
+      {contato && <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}><input type="checkbox" checked={optOut} onChange={e => setOptOut(e.target.checked)} /> Descadastrado (não recebe campanhas)</label>}
     </Modal>
   );
 }

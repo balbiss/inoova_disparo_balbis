@@ -1,10 +1,47 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
-import { Plus, QrCode, Smartphone, Trash2, Unplug, Pencil, KeyRound } from 'lucide-react';
+import { Plus, QrCode, Smartphone, Trash2, Unplug, Pencil, KeyRound, RefreshCw, ShieldAlert, ShieldCheck, Flame } from 'lucide-react';
 import { api, confirmar, erro, fmtTel, getUsuario, ok } from '../lib/api';
-import { Cabecalho, Campo, Carregando, Modal, Pilula, Vazio, btn, inputStyle } from '../components/ui';
+import { Cabecalho, Campo, Carregando, Modal, Pilula, Progresso, Vazio, btn, inputStyle } from '../components/ui';
+import { Avatar } from '../components/Avatar';
 
-type Conexao = { id: number; name: string; phone: string | null; connected: boolean; state: string; createdAt: string };
+type Conexao = {
+  id: number; name: string; phone: string | null; connected: boolean; state: string; createdAt: string; avatarUrl?: string | null;
+  health?: { restriction: boolean; restrictionEndsAt: string | null; capping: string | null; cappingRemaining: number | null; cappingTotal: number | null; at: string | null };
+  seguranca?: { pausedUntil: string | null; pauseReason: string | null; nextAt: string | null; hora: number; dia: number; limiteHora: number; limiteDia: number; diaAquecimento: number | null };
+};
+const hhmm = (d: string) => new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+function Saude({ c, onMudou }: { c: Conexao; onMudou: () => void }) {
+  const [atualizando, setAtualizando] = useState(false);
+  const h = c.health, sg = c.seguranca;
+  if (!h || !sg) return null;
+  const atualizar = async () => { setAtualizando(true); try { await api('POST', `/connections/${c.id}/health`); onMudou() } catch (e) { erro(e) } finally { setAtualizando(false) } };
+  const reiniciar = async () => {
+    if (!(await confirmar('Recomeçar o aquecimento?', 'Use quando o chip for novo ou o número voltou de um bloqueio. O limite do dia volta pro valor do 1º dia e sobe aos poucos.', 'Recomeçar'))) return;
+    try { await api('POST', `/connections/${c.id}/reset-warmup`); ok('Aquecimento recomeçado.'); onMudou() } catch (e) { erro(e) }
+  };
+  const alertas: { cor: string; texto: string }[] = [];
+  if (h.restriction) alertas.push({ cor: '#C42B30', texto: `Restrição do WhatsApp${h.restrictionEndsAt ? ' até ' + hhmm(h.restrictionEndsAt) : ''}: mensagens pra quem não respondeu podem não chegar. Disparos parados.` });
+  if (h.capping === 'CAPPED') alertas.push({ cor: '#C42B30', texto: 'Limite de conversas novas do WhatsApp esgotado neste ciclo. Disparos parados até renovar.' });
+  else if (h.capping === 'FIRST_WARNING' || h.capping === 'SECOND_WARNING') alertas.push({ cor: '#9A6100', texto: `Perto do limite de conversas novas do WhatsApp${h.cappingRemaining != null && h.cappingRemaining >= 0 ? ` (restam ${h.cappingRemaining})` : ''}.` });
+  if (sg.pausedUntil) alertas.push({ cor: '#9A6100', texto: sg.pauseReason || `Pausa de segurança até ${hhmm(sg.pausedUntil)}` });
+  return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px dashed var(--line)', fontSize: 13 }}>
+      {alertas.map((a, i) => <div key={i} style={{ display: 'flex', gap: 6, color: a.cor, marginBottom: 8, lineHeight: 1.45 }}><ShieldAlert size={15} style={{ flex: 'none', marginTop: 1 }} /> {a.texto}</div>)}
+      {!alertas.length && <div style={{ display: 'flex', gap: 6, color: 'var(--verde-escuro)', marginBottom: 8 }}><ShieldCheck size={15} /> Sem restrição do WhatsApp</div>}
+      <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--muted)', marginBottom: 4 }}><span>Envios hoje</span><b style={{ color: 'var(--ink)' }}>{sg.dia} de {sg.limiteDia}</b></div>
+      <Progresso valor={sg.dia} total={sg.limiteDia} cor={sg.dia >= sg.limiteDia ? '#F5A524' : 'var(--verde)'} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--muted)', marginTop: 6 }}><span>Última hora</span><span>{sg.hora} de {sg.limiteHora}</span></div>
+      {h.capping && h.capping !== 'UNLIMITED' && h.cappingTotal != null && h.cappingTotal > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--muted)', marginTop: 4 }}><span>Conversas novas (WhatsApp)</span><span>{h.cappingRemaining} de {h.cappingTotal} restantes</span></div>}
+      {sg.diaAquecimento && <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#9A6100', marginTop: 6 }}><Flame size={14} /> Aquecendo: dia {sg.diaAquecimento} · <button style={btn('link', { minHeight: 0, padding: 0, fontSize: 12.5 })} onClick={reiniciar}>recomeçar</button></div>}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, color: 'var(--muted)', fontSize: 12 }}>
+        <span>{h.at ? 'Verificado ' + hhmm(h.at) : 'Ainda não verificado'}</span>
+        {c.connected && <button style={btn('link', { minHeight: 0, padding: 0, fontSize: 12.5 })} disabled={atualizando} onClick={atualizar}><RefreshCw size={12} /> {atualizando ? 'Verificando…' : 'Verificar agora'}</button>}
+      </div>
+    </div>
+  );
+}
 
 export default function Conexoes() {
   const [lista, setLista] = useState<Conexao[] | null>(null);
@@ -42,7 +79,7 @@ export default function Conexoes() {
           {lista.map(c => (
             <div key={c.id} style={{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 4, borderTop: `3px solid ${c.connected ? 'var(--verde-zap)' : '#C9D1D5'}`, padding: 16 }}>
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-                <span style={{ width: 44, height: 44, borderRadius: 99, background: c.connected ? 'var(--verde-soft)' : '#EEF1F2', color: c.connected ? 'var(--verde-escuro)' : 'var(--muted)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}><Smartphone size={21} /></span>
+                <Avatar url={c.avatarUrl} nome={c.name} size={48} apagado={!c.connected} icone={<Smartphone size={21} />} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <strong style={{ fontSize: 16, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</strong>
@@ -58,6 +95,7 @@ export default function Conexoes() {
                   : <button style={btn('primary', { flex: 1 })} onClick={() => setConectar(c)}><QrCode size={15} /> Conectar</button>}
                 <button style={btn('ghost', { padding: '0 11px' })} title="Remover número" onClick={() => remover(c)}><Trash2 size={15} color="var(--perigo)" /></button>
               </div>
+              <Saude c={c} onMudou={carregar} />
             </div>
           ))}
         </div>

@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { CheckCheck, Megaphone, PhoneCall, Smartphone, UsersRound, AlertTriangle } from 'lucide-react';
-import { api, erro, fmtNum, getUsuario } from '../lib/api';
+import { CheckCheck, Megaphone, MessageCircle, PhoneCall, Smartphone, UsersRound, AlertTriangle } from 'lucide-react';
+import { api, erro, fmtData, fmtNum, getUsuario } from '../lib/api';
 import { Cabecalho, Card, Carregando, btn } from '../components/ui';
 import { StatusCampanha } from '../lib/status';
 
@@ -9,7 +9,8 @@ type Dados = {
   contatos: number;
   conexoes: { total: number; conectadas: number };
   hoje: { enviadas: number; atendidas: number; falhas: number };
-  ativas: { id: number; name: string; kind: string; status: string; pauseReason: string | null }[];
+  respostasHoje: number; naoLidas: number;
+  ativas: { id: number; name: string; kind: string; status: string; pauseReason: string | null; waitReason: string | null; scheduledAt: string | null }[];
   dias: { dia: string; enviadas: number; ligacoes: number; falhas: number }[];
 };
 
@@ -62,6 +63,7 @@ export default function Painel() {
           cor={desconectado ? '#9A6100' : undefined} fundo={desconectado ? 'var(--alerta-soft)' : undefined} />
         <Kpi icone={<CheckCheck size={22} />} valor={fmtNum(d.hoje.enviadas)} label="Mensagens enviadas hoje" />
         <Kpi icone={<PhoneCall size={22} />} valor={fmtNum(d.hoje.atendidas)} label="Ligações atendidas hoje" cor="#1D5FC2" fundo="var(--info-soft)" />
+        <Kpi icone={<MessageCircle size={22} />} valor={fmtNum(d.respostasHoje)} label={d.naoLidas ? `Responderam hoje · ${d.naoLidas} não lida(s)` : 'Responderam hoje'} cor="#7C5CFF" fundo="#F1EDFF" to="/conversas" />
       </div>
 
       <div className="grid-2">
@@ -98,9 +100,9 @@ export default function Painel() {
               {c.kind === 'call' ? <PhoneCall size={17} color="var(--muted)" /> : <Megaphone size={17} color="var(--muted)" />}
               <span style={{ flex: 1, minWidth: 0 }}>
                 <span style={{ display: 'block', fontWeight: 700, fontSize: 14, color: '#1D5FC2', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
-                {c.status === 'paused' && c.pauseReason && <span style={{ display: 'block', fontSize: 12, color: 'var(--muted)' }}>{c.pauseReason}</span>}
+                {(c.status === 'paused' ? c.pauseReason : c.status === 'running' ? c.waitReason : c.scheduledAt ? 'Começa ' + fmtData(c.scheduledAt) : null) && <span style={{ display: 'block', fontSize: 12, color: 'var(--muted)' }}>{c.status === 'paused' ? c.pauseReason : c.status === 'running' ? c.waitReason : 'Começa ' + fmtData(c.scheduledAt)}</span>}
               </span>
-              <StatusCampanha status={c.status} />
+              <StatusCampanha status={c.status} esperando={!!c.waitReason} />
             </Link>
           ))}
         </Card>

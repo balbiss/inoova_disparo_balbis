@@ -18,20 +18,101 @@ export const pedeDescadastro = (texto: string) => {
 const PREVIA: Record<string, string> = { image: '📷 Foto', video: '🎥 Vídeo', audio: '🎤 Áudio', document: '📄 Documento', sticker: 'Figurinha', location: '📍 Localização', contact: '👤 Contato', poll: '📊 Enquete', call: '📞 Ligação' };
 export const previa = (tipo: string, texto: string) => (texto?.trim() ? texto.trim().slice(0, 140) : PREVIA[tipo] || 'Mensagem');
 
-/** Acha/cria a conversa do telefone naquele número da empresa. */
+// --- telefone com ou sem o 9º dígito ------------------------------------------------------------
+// O WhatsApp às vezes registra celular BR SEM o 9 (55 91 8293-5558) e a lista tem COM o 9
+// (55 91 9 8293-5558). A "chave" ignora isso: DDI+DDD + últimos 8 dígitos (igual InoovaCall).
+export const chaveTelefone = (t: string) => {
+  const d = String(t || '').replace(/\D/g, '');
+  return d.startsWith('55') && d.length >= 12 ? d.slice(0, 4) + d.slice(-8) : d;
+};
+/** Mesma chave em SQL, pra comparar uma coluna de telefone. */
+export const chaveSql = (col: unknown) => sql`(case when ${col} like '55%' and length(${col}) >= 12 then left(${col}, 4) || right(${col}, 8) else ${col} end)`;
+export const mesmoTelefone = (col: unknown, phone: string) => sql`${chaveSql(col)} = ${chaveTelefone(phone)}`;
+
+/** Acha/cria a conversa do telefone naquele número da empresa (com ou sem o 9). */
 export async function conversaDe(conn: Conexao, phone: string, nome = '') {
-  const [ja] = await db.select().from(conversations).where(and(eq(conversations.connectionId, conn.id), eq(conversations.phone, phone)));
+  const [ja] = await db.select().from(conversations).where(and(eq(conversations.connectionId, conn.id), mesmoTelefone(conversations.phone, phone))).orderBy(conversations.id).limit(1);
   if (ja) {
     if (nome && !ja.name) await db.update(conversations).set({ name: nome }).where(eq(conversations.id, ja.id));
     return ja;
   }
-  const [contato] = await db.select({ id: contacts.id, name: contacts.name }).from(contacts).where(and(eq(contacts.tenantId, conn.tenantId), eq(contacts.phone, phone)));
+  const [contato] = await db.select({ id: contacts.id, name: contacts.name, phone: contacts.phone }).from(contacts).where(and(eq(contacts.tenantId, conn.tenantId), mesmoTelefone(contacts.phone, phone))).limit(1);
+  // guarda o telefone como está na lista de contatos (com o 9), pra bater com a campanha
+  const tel = contato?.phone || phone;
   const [nova] = await db.insert(conversations).values({
-    tenantId: conn.tenantId, connectionId: conn.id, phone, contactId: contato?.id ?? null, name: contato?.name || nome || '',
+    tenantId: conn.tenantId, connectionId: conn.id, phone: tel, contactId: contato?.id ?? null, name: contato?.name || nome || '',
   }).onConflictDoNothing().returning();
   if (nova) return nova;
-  const [c] = await db.select().from(conversations).where(and(eq(conversations.connectionId, conn.id), eq(conversations.phone, phone)));
+  const [c] = await db.select().from(conversations).where(and(eq(conversations.connectionId, conn.id), mesmoTelefone(conversations.phone, phone))).limit(1);
   return c;
+}
+
+/** Junta conversas duplicadas do mesmo telefone (com/sem 9) — roda ao subir o servidor. */
+export async function juntarConversasDuplicadas() {
+  const grupos = await db.execute(sql`
+    select connection_id, ${chaveSql(sql.raw('phone'))} as chave, array_agg(id order by (contact_id is null), id) as ids
+      from conversations group by connection_id, chave having count(*) > 1`) as unknown as { ids: number[] }[];
+  for (const g of grupos) {
+    const [fica, ...sai] = g.ids.map(Number);
+    for (const id of sai) {
+      // mensagem que já existe na conversa que fica (mesmo id do WhatsApp) é descartada
+      await db.execute(sql`delete from messages m where m.conversation_id = ${id} and m.wa_id is not null
+                           and exists (select 1 from messages x where x.conversation_id = ${fica} and x.wa_id = m.wa_id)`);
+      await db.update(messages).set({ conversationId: fica }).where(eq(messages.conversationId, id));
+      const [velha] = await db.select().from(conversations).where(eq(conversations.id, id));
+      await db.execute(sql`update conversations c set
+          unread = c.unread + ${velha.unread},
+          last_inbound_at = greatest(c.last_inbound_at, ${velha.lastInboundAt?.toISOString() ?? null}::timestamptz),
+          name = case when c.name = '' then ${velha.name} else c.name end,
+          contact_id = coalesce(c.contact_id, ${velha.contactId}),
+          last_campaign_id = coalesce(c.last_campaign_id, ${velha.lastCampaignId})
+        where c.id = ${fica}`);
+      await db.delete(conversations).where(eq(conversations.id, id));
+    }
+    // prévia/hora da última mensagem depois de juntar
+    await db.execute(sql`update conversations c set last_message_at = m.created_at, last_preview = left(coalesce(nullif(m.text, ''), 'Mensagem'), 140), last_from_me = m.from_me
+      from (select created_at, text, from_me from messages where conversation_id = ${fica} order by created_at desc, id desc limit 1) m where c.id = ${fica}`);
+  }
+  if (grupos.length) console.log(`[conversas] ${grupos.length} conversa(s) duplicada(s) juntada(s)`);
+}
+
+// --- foto e nome do perfil ----------------------------------------------------------------------
+const nomesPorSessao = new Map<string, { at: number; mapa: Map<string, string> }>();
+async function nomeNoWhatsapp(sessionId: string, phone: string) {
+  let c = nomesPorSessao.get(sessionId);
+  if (!c || Date.now() - c.at > 10 * 60_000) {
+    const mapa = new Map<string, string>();
+    try {
+      const r = await astra<any>('GET', `/api/sessions/${encodeURIComponent(sessionId)}/contacts`, undefined, { timeoutMs: 20_000 });
+      const lista: any[] = Array.isArray(r) ? r : r?.contacts || [];
+      for (const x of lista) {
+        const tel = String(x.phone || x.number || '').replace(/\D/g, '');
+        const nome = String(x.pushName || x.pushname || x.fullName || x.businessName || x.name || '').trim();
+        if (tel && nome) mapa.set(chaveTelefone(tel), nome);
+      }
+    } catch { /* sem nomes agora */ }
+    c = { at: Date.now(), mapa };
+    nomesPorSessao.set(sessionId, c);
+  }
+  return c.mapa.get(chaveTelefone(phone)) || null;
+}
+
+/** Busca a foto do perfil e o nome no WhatsApp (no máximo a cada 12 h por conversa). */
+export async function atualizarPerfil(conv: typeof conversations.$inferSelect, forcar = false) {
+  if (!forcar && conv.profileAt && Date.now() - conv.profileAt.getTime() < 12 * 3600_000) return conv;
+  const [conn] = await db.select().from(connections).where(eq(connections.id, conv.connectionId));
+  if (!conn) return conv;
+  let avatarUrl: string | null = conv.avatarUrl;
+  try {
+    const r = await astra<{ url?: string }>('GET', `/api/sessions/${encodeURIComponent(conn.sessionId)}/contacts/${conv.phone}/picture?preview=true`, undefined, { timeoutMs: 15_000 });
+    avatarUrl = r?.url || null;
+  } catch (e) {
+    if ((e as { status?: number }).status === 503) return conv; // número desconectado: tenta depois
+  }
+  const waName = (await nomeNoWhatsapp(conn.sessionId, conv.phone)) || conv.waName;
+  const [novo] = await db.update(conversations).set({ avatarUrl, waName, profileAt: new Date(), ...(!conv.name && waName ? { name: waName } : {}) })
+    .where(eq(conversations.id, conv.id)).returning();
+  return novo ?? conv;
 }
 
 type NovaMsg = {
@@ -61,13 +142,15 @@ export async function gravarMensagem(conv: typeof conversations.$inferSelect, m:
 async function ultimoAlvo(tenantId: number, phone: string) {
   const [a] = await db.select({ id: campaignTargets.id, campaignId: campaignTargets.campaignId, repliedAt: campaignTargets.repliedAt })
     .from(campaignTargets).innerJoin(campaigns, eq(campaigns.id, campaignTargets.campaignId))
-    .where(and(eq(campaigns.tenantId, tenantId), eq(campaignTargets.phone, phone), inArray(campaignTargets.status, ['sent', 'completed', 'no-answer', 'answered', 'warming', 'ringing']), sql`coalesce(${campaignTargets.doneAt}, ${campaignTargets.preSentAt}) >= now() - interval '30 days'`))
+    .where(and(eq(campaigns.tenantId, tenantId), mesmoTelefone(campaignTargets.phone, phone), inArray(campaignTargets.status, ['sent', 'completed', 'no-answer', 'answered', 'warming', 'ringing']), sql`coalesce(${campaignTargets.doneAt}, ${campaignTargets.preSentAt}) >= now() - interval '30 days'`))
     .orderBy(desc(sql`coalesce(${campaignTargets.doneAt}, ${campaignTargets.preSentAt})`)).limit(1);
   return a;
 }
 
 /** Marca o contato como descadastrado (cria o contato se ainda não existir, pra ficar bloqueado). */
 export async function descadastrar(tenantId: number, phone: string, nome = '') {
+  const [ja] = await db.select({ id: contacts.id }).from(contacts).where(and(eq(contacts.tenantId, tenantId), mesmoTelefone(contacts.phone, phone))).limit(1);
+  if (ja) { await db.update(contacts).set({ optOut: true, optOutAt: new Date() }).where(eq(contacts.id, ja.id)); return }
   await db.insert(contacts).values({ tenantId, phone, name: nome, optOut: true, optOutAt: new Date() })
     .onConflictDoUpdate({ target: [contacts.tenantId, contacts.phone], set: { optOut: true, optOutAt: new Date() } });
 }

@@ -22,6 +22,18 @@ async function daEmpresa(req: any) {
   return c;
 }
 
+// foto de perfil do próprio número conectado (em memória, 12 h)
+const fotos = new Map<number, { url: string | null; at: number; phone: string }>();
+async function fotoDoNumero(c: typeof connections.$inferSelect, phone: string | null, conectado: boolean) {
+  if (!phone || !conectado) return fotos.get(c.id)?.url ?? null;
+  const f = fotos.get(c.id);
+  if (f && f.phone === phone && Date.now() - f.at < 12 * 3600_000) return f.url;
+  let url: string | null = null;
+  try { url = (await astra<{ url?: string }>('GET', `/api/sessions/${encodeURIComponent(c.sessionId)}/contacts/${phone}/picture?preview=true`, undefined, { timeoutMs: 10_000 }))?.url || null } catch { /* sem foto */ }
+  fotos.set(c.id, { url, at: Date.now(), phone });
+  return url;
+}
+
 async function comEstado(c: typeof connections.$inferSelect) {
   const st = await estadoDe(c.sessionId);
   const phone = numeroDoJid(st?.jid) || c.phone;
@@ -32,6 +44,7 @@ async function comEstado(c: typeof connections.$inferSelect) {
   const pausado = c.pausedUntil && c.pausedUntil > new Date();
   return {
     id: c.id, name: c.name, phone, connected: !!st?.paired, state: st?.state || 'desconhecido', createdAt: c.createdAt,
+    avatarUrl: await fotoDoNumero(c, phone, !!st?.paired),
     health: { restriction: restricao, restrictionEndsAt: restricao ? c.restrictionEndsAt : null, capping: c.cappingStatus, cappingRemaining: c.cappingRemaining, cappingTotal: c.cappingTotal, at: c.healthAt },
     seguranca: { pausedUntil: pausado ? c.pausedUntil : null, pauseReason: pausado ? c.pauseReason : null, nextAt: c.nextAt, ...uso },
   };

@@ -1,3 +1,4 @@
+import { chaveSql, chaveTelefone } from './conversas.js';
 import { and, eq, isNotNull, ne, notInArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { campaigns, campaignTargets, connections, settings } from '../db/schema.js';
@@ -209,7 +210,7 @@ export async function checarFalhasSeguidas(conn: Conexao) {
 export async function emConversa(connId: number, phone: string) {
   const r = await db.execute(sql`
     select 1 from messages m join conversations c on c.id = m.conversation_id
-     where c.connection_id = ${connId} and c.phone = ${phone} and m.from_me and m.campaign_id is null
+     where c.connection_id = ${connId} and ${chaveSql(sql.raw('c.phone'))} = ${chaveTelefone(phone)} and m.from_me and m.campaign_id is null
        and m.type <> 'call' and m.created_at > now() - interval '3 days' limit 1`);
   return (r as unknown as unknown[]).length > 0;
 }

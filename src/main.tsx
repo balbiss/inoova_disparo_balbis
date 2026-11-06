@@ -14,6 +14,7 @@ import CampanhaDetalhe from './pages/CampanhaDetalhe';
 import Equipe from './pages/Equipe';
 import Conversas from './pages/Conversas';
 import Empresas from './pages/Empresas';
+import Seguranca from './pages/Seguranca';
 
 function Protegida({ children }: { children: React.ReactNode }) {
   return getToken() ? <>{children}</> : <Navigate to="/login" replace />;
@@ -40,6 +41,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           <Route path="/conexoes" element={<Conexoes />} />
           <Route path="/equipe" element={<Equipe />} />
           <Route path="/empresas" element={<Empresas />} />
+          <Route path="/seguranca" element={<Seguranca />} />
         </Route>
         <Route path="*" element={<Inicio />} />
       </Routes>
