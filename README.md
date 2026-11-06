@@ -39,8 +39,7 @@ PW=<playwright-core> node tests/ui-fluxo.cjs     # painel no Chrome, inclusive 3
 ## Produção
 `Dockerfile` gera um container só (API + painel na porta 3020). Variáveis: `DATABASE_URL`, `JWT_SECRET`,
 `SUPERADMIN_EMAIL`, `SUPERADMIN_PASSWORD`, `ASTRACALLS_URL`, `ASTRACALLS_API_KEY`, `PUBLIC_URL` (webhook do AstraCalls) e `GMAPS_URL` (extrator de leads); volume em `/app/uploads`.
-Stack pronta em `deploy/stack.yml` (app + Postgres + extrator gosom só na rede interna).
+Stack pronta em `deploy/stack.yml` (app + Postgres + extrator gosom só na rede interna). As migrações rodam sozinhas ao subir.
 
 ## Extrator de leads
 Usa o [gosom/google-maps-scraper](https://github.com/gosom/google-maps-scraper) (MIT) em modo web, na rede interna (ele não tem senha). Em desenvolvimento dá pra usar o simulado: `node server/scripts/gmaps-mock.mjs` + `GMAPS_URL=http://localhost:8099`. Raspar o Google Maps vai contra os termos do Google: em volume alto o IP pode ser bloqueado (usar proxy).
-As migrações rodam sozinhas ao subir.
