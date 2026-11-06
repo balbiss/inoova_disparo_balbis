@@ -1,0 +1,8 @@
+node_modules/
+dist/
+server/dist/
+server/.env
+server/.devdb/
+server/uploads/
+*.log
+.env

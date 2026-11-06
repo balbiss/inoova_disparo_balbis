@@ -1,0 +1,115 @@
+import { Router } from 'express';
+import { and, eq, inArray, sql } from 'drizzle-orm';
+import { z } from 'zod';
+import { db } from '../db/client.js';
+import { campaigns, connections, tenants } from '../db/schema.js';
+import { exigirEmpresa, exigirLogin, tenantDe } from '../lib/auth.js';
+import { astra, AstraErro, clientIdDe, estadoDe, numeroDoJid } from '../lib/astra.js';
+
+// Números de WhatsApp da empresa (cada um = uma sessão no AstraCalls).
+export const connectionsRouter = Router();
+connectionsRouter.use(exigirLogin, exigirEmpresa);
+
+const erroAstra = (res: any, e: unknown) => {
+  const err = e as AstraErro;
+  res.status(err.status && err.status < 600 ? (err.status === 401 ? 502 : err.status) : 500).json({ error: err.message || 'Erro no servidor do WhatsApp.' });
+};
+
+async function daEmpresa(req: any) {
+  const [c] = await db.select().from(connections).where(and(eq(connections.id, Number(req.params.id)), eq(connections.tenantId, tenantDe(req))));
+  return c;
+}
+
+async function comEstado(c: typeof connections.$inferSelect) {
+  const st = await estadoDe(c.sessionId);
+  const phone = numeroDoJid(st?.jid) || c.phone;
+  if (st?.paired && phone && phone !== c.phone) await db.update(connections).set({ phone }).where(eq(connections.id, c.id));
+  return { id: c.id, name: c.name, phone, connected: !!st?.paired, state: st?.state || 'desconhecido', createdAt: c.createdAt };
+}
+
+connectionsRouter.get('/', async (req, res) => {
+  const l = await db.select().from(connections).where(eq(connections.tenantId, tenantDe(req))).orderBy(connections.id);
+  res.json({ connections: await Promise.all(l.map(comEstado)) });
+});
+
+connectionsRouter.post('/', async (req, res) => {
+  const p = z.object({ name: z.string().trim().min(1, 'Dê um nome pro número.').max(60) }).safeParse(req.body);
+  if (!p.success) return res.status(400).json({ error: p.error.issues[0].message });
+  const tid = tenantDe(req);
+  const [t] = await db.select().from(tenants).where(eq(tenants.id, tid));
+  const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(connections).where(eq(connections.tenantId, tid));
+  if (n >= t.maxConnections) return res.status(400).json({ error: `Seu plano permite ${t.maxConnections} número(s) de WhatsApp.` });
+  try {
+    const s = await astra<{ id: string }>('POST', '/api/sessions', { name: `${t.name} · ${p.data.name}`.slice(0, 80) }, { clientId: clientIdDe(tid) });
+    const [c] = await db.insert(connections).values({ tenantId: tid, name: p.data.name, sessionId: s.id }).returning();
+    res.status(201).json({ connection: await comEstado(c) });
+  } catch (e) { erroAstra(res, e) }
+});
+
+connectionsRouter.patch('/:id', async (req, res) => {
+  const c = await daEmpresa(req);
+  if (!c) return res.status(404).json({ error: 'Número não encontrado.' });
+  const p = z.object({ name: z.string().trim().min(1).max(60) }).safeParse(req.body);
+  if (!p.success) return res.status(400).json({ error: 'Nome inválido.' });
+  await db.update(connections).set({ name: p.data.name }).where(eq(connections.id, c.id));
+  res.json({ ok: true });
+});
+
+// estado + QR (a tela consulta a cada 2 s enquanto o QR está aberto)
+connectionsRouter.get('/:id/status', async (req, res) => {
+  const c = await daEmpresa(req);
+  if (!c) return res.status(404).json({ error: 'Número não encontrado.' });
+  const st = await estadoDe(c.sessionId);
+  res.json({ ...(await comEstado(c)), qr: st && !st.paired ? st.qr ?? null : null });
+});
+
+// gera o QR
+connectionsRouter.post('/:id/qr', async (req, res) => {
+  const c = await daEmpresa(req);
+  if (!c) return res.status(404).json({ error: 'Número não encontrado.' });
+  try {
+    await astra('POST', `/api/sessions/${encodeURIComponent(c.sessionId)}/pair`, undefined, { clientId: clientIdDe(c.tenantId) });
+    res.json({ ok: true });
+  } catch (e) {
+    if (/already paired/i.test((e as Error).message)) return res.json({ ok: true, connected: true });
+    erroAstra(res, e);
+  }
+});
+
+// alternativa ao QR: código de 8 letras digitado no celular
+connectionsRouter.post('/:id/pair-code', async (req, res) => {
+  const c = await daEmpresa(req);
+  if (!c) return res.status(404).json({ error: 'Número não encontrado.' });
+  let phone = String(req.body?.phone || '').replace(/\D/g, '');
+  if (phone.length === 10 || phone.length === 11) phone = '55' + phone;
+  if (phone.length < 12) return res.status(400).json({ error: 'Informe o número com DDD.' });
+  try {
+    const r = await astra<{ code: string }>('POST', `/api/sessions/${encodeURIComponent(c.sessionId)}/pair-code`, { phone }, { clientId: clientIdDe(c.tenantId) });
+    res.json({ code: r.code });
+  } catch (e) { erroAstra(res, e) }
+});
+
+connectionsRouter.post('/:id/logout', async (req, res) => {
+  const c = await daEmpresa(req);
+  if (!c) return res.status(404).json({ error: 'Número não encontrado.' });
+  try {
+    await astra('POST', `/api/sessions/${encodeURIComponent(c.sessionId)}/logout`, undefined, { clientId: clientIdDe(c.tenantId) });
+    await estadoDe(c.sessionId, true);
+    res.json({ ok: true });
+  } catch (e) { erroAstra(res, e) }
+});
+
+connectionsRouter.delete('/:id', async (req, res) => {
+  const c = await daEmpresa(req);
+  if (!c) return res.status(404).json({ error: 'Número não encontrado.' });
+  const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(campaigns)
+    .where(and(eq(campaigns.connectionId, c.id), inArray(campaigns.status, ['running', 'paused'])));
+  if (n > 0) return res.status(400).json({ error: 'Esse número tem campanha em andamento ou pausada. Cancele ou conclua antes de remover.' });
+  try {
+    await astra('DELETE', `/api/sessions/${encodeURIComponent(c.sessionId)}`, undefined, { clientId: clientIdDe(c.tenantId) });
+  } catch (e) {
+    if ((e as AstraErro).status !== 404) return erroAstra(res, e);
+  }
+  await db.delete(connections).where(eq(connections.id, c.id));
+  res.json({ ok: true });
+});
