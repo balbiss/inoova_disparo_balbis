@@ -5,6 +5,8 @@
 const URL_ASTRA = () => (process.env.ASTRACALLS_URL || '').replace(/\/$/, '');
 const CHAVE = () => process.env.ASTRACALLS_API_KEY || '';
 export const astraConfigurado = () => !!(URL_ASTRA() && CHAVE());
+export const astraUrl = () => URL_ASTRA();
+export const astraChave = () => CHAVE();
 
 export class AstraErro extends Error {
   constructor(msg: string, public status: number) { super(msg) }
@@ -38,8 +40,12 @@ export const clientIdDe = (tenantId: number) => `disparo_t${tenantId}`;
 export type EstadoSessao = { state: string; paired: boolean; jid?: string; qr?: string; at: number };
 export const estadoSessao = new Map<string, EstadoSessao>();
 
+/** Outros módulos (ex.: ligação pelo navegador) recebem os eventos do AstraCalls por aqui. */
+export const ouvintesEventos: ((ev: any) => void | Promise<void>)[] = [];
+
 function tratar(ev: any) {
   if (!ev?.type) return;
+  for (const fn of ouvintesEventos) { try { void Promise.resolve(fn(ev)).catch(e => console.warn('[astra] ouvinte', (e as Error).message)) } catch { /* */ } }
   const sid = ev.sessionId;
   const atual = sid ? estadoSessao.get(sid) : undefined;
   if (ev.type === 'session-qr' && sid) {

@@ -96,6 +96,20 @@ connectionsRouter.patch('/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
+// grupos do WhatsApp deste número (pra extrair contatos ou disparar dentro deles)
+connectionsRouter.get('/:id/groups', async (req, res) => {
+  const c = await daEmpresa(req);
+  if (!c) return res.status(404).json({ error: 'Número não encontrado.' });
+  try {
+    const l = await astra<any[]>('GET', `/api/sessions/${encodeURIComponent(c.sessionId)}/groups`, undefined, { timeoutMs: 60_000 });
+    const grupos = (l || []).filter(g => !g.isCommunity).map(g => ({
+      jid: String(g.jid || g.id), name: String(g.name || g.subject || 'Grupo sem nome'), participants: (g.participants || []).length,
+      withPhone: (g.participants || []).filter((p: any) => p.phone).length, announce: !!g.announce,
+    })).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+    res.json({ groups: grupos });
+  } catch (e) { erroAstra(res, e) }
+});
+
 // estado + QR (a tela consulta a cada 2 s enquanto o QR está aberto)
 connectionsRouter.get('/:id/status', async (req, res) => {
   const c = await daEmpresa(req);
@@ -144,7 +158,7 @@ connectionsRouter.delete('/:id', async (req, res) => {
   const c = await daEmpresa(req);
   if (!c) return res.status(404).json({ error: 'Número não encontrado.' });
   const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(campaigns)
-    .where(and(eq(campaigns.connectionId, c.id), inArray(campaigns.status, ['running', 'paused', 'scheduled'])));
+    .where(and(sql`(${campaigns.connectionId} = ${c.id} or ${campaigns.connectionIds} @> ${JSON.stringify([c.id])}::jsonb)`, inArray(campaigns.status, ['running', 'paused', 'scheduled'])));
   if (n > 0) return res.status(400).json({ error: 'Esse número tem campanha em andamento ou pausada. Cancele ou conclua antes de remover.' });
   try {
     await astra('DELETE', `/api/sessions/${encodeURIComponent(c.sessionId)}`, undefined, { clientId: clientIdDe(c.tenantId) });

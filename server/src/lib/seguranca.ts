@@ -158,7 +158,8 @@ export async function limitesNumero(conn: Pick<Conexao, 'id' | 'warmupSince'>, c
   const a = await lerAdmin();
   const umaHora = new Date(Date.now() - 3600_000);
   const inicioDia = sql`(date_trunc('day', now() at time zone 'America/Sao_Paulo') at time zone 'America/Sao_Paulo')`;
-  const doNumero = and(eq(campaigns.connectionId, conn.id), notInArray(campaignTargets.status, NAO_CONTA));
+  // conta pelo número que de fato enviou (rodízio); sem registro, vale o principal da campanha
+  const doNumero = and(sql`coalesce(${campaignTargets.connectionId}, ${campaigns.connectionId}) = ${conn.id}`, notInArray(campaignTargets.status, NAO_CONTA));
   const [r] = await db.select({
     hora: sql<number>`count(*) filter (where ${campaignTargets.doneAt} >= ${umaHora.toISOString()}::timestamptz or ${campaignTargets.preSentAt} >= ${umaHora.toISOString()}::timestamptz)::int`,
     dia: sql<number>`count(*) filter (where ${campaignTargets.doneAt} >= ${inicioDia} or ${campaignTargets.preSentAt} >= ${inicioDia})::int`,
@@ -198,7 +199,7 @@ export async function checarFalhasSeguidas(conn: Conexao) {
   const a = await lerAdmin();
   if (a.falhasSeguidas <= 0) return;
   const ult = await db.select({ status: campaignTargets.status }).from(campaignTargets).innerJoin(campaigns, eq(campaigns.id, campaignTargets.campaignId))
-    .where(and(eq(campaigns.connectionId, conn.id), isNotNull(campaignTargets.doneAt), ne(campaignTargets.status, 'skipped')))
+    .where(and(sql`coalesce(${campaignTargets.connectionId}, ${campaigns.connectionId}) = ${conn.id}`, isNotNull(campaignTargets.doneAt), ne(campaignTargets.status, 'skipped')))
     .orderBy(sql`${campaignTargets.doneAt} desc`).limit(a.falhasSeguidas);
   if (ult.length >= a.falhasSeguidas && ult.every(u => u.status === 'failed')) {
     const ate = new Date(Date.now() + a.pausaFalhasMin * 60_000);

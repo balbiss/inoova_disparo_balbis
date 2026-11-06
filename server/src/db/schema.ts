@@ -81,6 +81,8 @@ export const campaigns = pgTable('campaigns', {
   id: serial('id').primaryKey(),
   tenantId: integer('tenant_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
   connectionId: integer('connection_id').references(() => connections.id, { onDelete: 'set null' }),
+  // rodízio de chips: todos os números que enviam esta campanha (o connection_id acima é o principal)
+  connectionIds: jsonb('connection_ids').$type<number[]>().notNull().default([]),
   createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
   name: text('name').notNull(),
   kind: text('kind').notNull(),
@@ -101,6 +103,8 @@ export const campaigns = pgTable('campaigns', {
   pollOptions: jsonb('poll_options').$type<string[]>().notNull().default([]),
   pollMulti: boolean('poll_multi').notNull().default(false),
   typing: boolean('typing').notNull().default(true),
+  // grupos: marca todos os participantes (@todos) na mensagem
+  mentionAll: boolean('mention_all').notNull().default(false),
   minDelay: integer('min_delay').notNull().default(20),
   maxDelay: integer('max_delay').notNull().default(45),
   pauseReason: text('pause_reason'),
@@ -138,6 +142,9 @@ export const campaignTargets = pgTable('campaign_targets', {
   preMsgId: text('pre_msg_id'),
   preSentAt: timestamp('pre_sent_at', { withTimezone: true }),
   callAfter: timestamp('call_after', { withTimezone: true }),
+  // número que enviou pra este contato (rodízio) e se o destino é um grupo do WhatsApp
+  connectionId: integer('connection_id').references(() => connections.id, { onDelete: 'set null' }),
+  isGroup: boolean('is_group').notNull().default(false),
 }, t => [index('targets_campaign_status_idx').on(t.campaignId, t.status), index('targets_astra_ref_idx').on(t.astraRef), index('targets_phone_idx').on(t.phone), index('targets_pre_msg_idx').on(t.preMsgId)]);
 
 // Conversas: uma por número de WhatsApp da empresa + telefone do contato.
@@ -161,6 +168,29 @@ export const conversations = pgTable('conversations', {
 }, t => [uniqueIndex('conversations_conn_phone_uq').on(t.connectionId, t.phone), index('conversations_tenant_idx').on(t.tenantId, t.lastMessageAt)]);
 
 // status (enviadas): sent | delivered | read | failed
+// Respostas rápidas da empresa (atalho "/preco" nas Conversas)
+export const quickReplies = pgTable('quick_replies', {
+  id: serial('id').primaryKey(),
+  tenantId: integer('tenant_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  shortcut: text('shortcut').notNull(),
+  text: text('text').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex('quick_replies_tenant_shortcut_uq').on(t.tenantId, t.shortcut)]);
+
+// Etiquetas das conversas (mini funil: Interessado, Fechou, Sem interesse…)
+export const tags = pgTable('tags', {
+  id: serial('id').primaryKey(),
+  tenantId: integer('tenant_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  color: text('color').notNull().default('#128C7E'),
+  position: integer('position').notNull().default(0),
+}, t => [index('tags_tenant_idx').on(t.tenantId)]);
+
+export const conversationTags = pgTable('conversation_tags', {
+  conversationId: integer('conversation_id').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
+  tagId: integer('tag_id').notNull().references(() => tags.id, { onDelete: 'cascade' }),
+}, t => [uniqueIndex('conversation_tags_uq').on(t.conversationId, t.tagId), index('conversation_tags_tag_idx').on(t.tagId)]);
+
 // Configurações do sistema (superadmin): chave → JSON. Ex.: 'antiban' = padrões e limites de segurança.
 export const settings = pgTable('settings', {
   key: text('key').primaryKey(),

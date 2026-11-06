@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { and, count, desc, eq, gt, ilike, isNotNull, lt, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/client.js';
-import { campaigns, connections, contacts, conversations, messages, users } from '../db/schema.js';
+import { campaigns, connections, contacts, conversations, conversationTags, messages, users } from '../db/schema.js';
 import { exigirEmpresa, exigirLogin, tenantDe } from '../lib/auth.js';
 import { astra, AstraErro } from '../lib/astra.js';
 import { atualizarPerfil, descadastrar, gravarMensagem, mesmoTelefone } from '../lib/conversas.js';
@@ -27,6 +27,7 @@ conversationsRouter.get('/', async (req, res) => {
   if (filtro === 'nao_lidas') conds.push(gt(conversations.unread, 0));
   if (req.query.connectionId) conds.push(eq(conversations.connectionId, Number(req.query.connectionId)));
   if (req.query.campaignId) conds.push(eq(conversations.lastCampaignId, Number(req.query.campaignId)));
+  if (req.query.tagId) conds.push(sql`exists (select 1 from conversation_tags ct where ct.conversation_id = ${conversations.id} and ct.tag_id = ${Number(req.query.tagId)})`);
   const q = String(req.query.q || '').trim();
   if (q) {
     const dig = q.replace(/\D/g, '');
@@ -39,6 +40,7 @@ conversationsRouter.get('/', async (req, res) => {
     lastMessageAt: conversations.lastMessageAt, lastPreview: conversations.lastPreview, lastFromMe: conversations.lastFromMe, unread: conversations.unread,
     connectionName: connections.name, campaignName: campaigns.name, optOut: sql<boolean>`coalesce(${contacts.optOut}, false)`,
     avatarUrl: conversations.avatarUrl, waName: conversations.waName, profileAt: conversations.profileAt,
+    tagIds: sql<number[]>`coalesce((select array_agg(ct.tag_id) from conversation_tags ct where ct.conversation_id = ${conversations.id}), '{}')`,
   }).from(conversations)
     .leftJoin(contacts, eq(contacts.id, conversations.contactId))
     .leftJoin(connections, eq(connections.id, conversations.connectionId))
@@ -72,6 +74,7 @@ conversationsRouter.get('/:id', async (req, res) => {
   res.json({ conversation: {
     id: c.id, phone: c.phone, name: contato?.name || c.name || perfil.waName || '', waName: perfil.waName, avatarUrl: perfil.avatarUrl, unread: c.unread, connectionName: conn?.name, connectionPhone: conn?.phone,
     contactId: contato?.id ?? null, optOut: !!contato?.optOut, campaign: camp ?? null,
+    tagIds: (await db.select({ id: conversationTags.tagId }).from(conversationTags).where(eq(conversationTags.conversationId, c.id))).map(t => t.id),
   } });
 });
 

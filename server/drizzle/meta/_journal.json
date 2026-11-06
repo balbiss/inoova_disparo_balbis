@@ -36,6 +36,13 @@
       "when": 1793931711274,
       "tag": "0004_perfil",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793934360187,
+      "tag": "0005_pacote_recursos",
+      "breakpoints": true
     }
   ]
 }

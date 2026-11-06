@@ -20,6 +20,8 @@ import { db } from './db/client.js';
 import { conversations } from './db/schema.js';
 import { webhooksRouter } from './routes/webhooks.js';
 import { conversationsRouter } from './routes/conversations.js';
+import { extrasRouter } from './routes/extras.js';
+import { callsRouter, tratarUpgradeLigacao } from './routes/calls.js';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -36,6 +38,8 @@ app.use('/api/connections', connectionsRouter);
 app.use('/api/contacts', contactsRouter);
 app.use('/api/campaigns', campaignsRouter);
 app.use('/api/dashboard', dashboardRouter);
+app.use('/api/calls', callsRouter);
+app.use('/api', extrasRouter);
 app.use('/api/conversations', conversationsRouter);
 if (process.env.ENABLE_TEST_ROUTES === '1' && process.env.NODE_ENV !== 'production') {
   const { testesRouter } = await import('./routes/testes.js');
@@ -73,6 +77,10 @@ async function iniciar() {
   iniciarEventosAstra();
   iniciarWorker();
   iniciarSaude();
-  app.listen(PORT, () => console.log(`[api] ouvindo na porta ${PORT}`));
+  const servidor = app.listen(PORT, () => console.log(`[api] ouvindo na porta ${PORT}`));
+  // áudio da ligação pelo navegador (WebSocket)
+  servidor.on('upgrade', (req, socket, head) => {
+    void tratarUpgradeLigacao(req, socket, head).then(tratou => { if (!tratou) socket.destroy() }).catch(() => socket.destroy());
+  });
 }
 void iniciar();

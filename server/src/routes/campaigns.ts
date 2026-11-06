@@ -11,6 +11,8 @@ import { exigirEmpresa, exigirLogin, tenantDe } from '../lib/auth.js';
 import { arquivoUpload, UPLOAD_DIR } from '../lib/uploads.js';
 import { estadoDe } from '../lib/astra.js';
 import { efetiva, limitesNumero, padraoCampanha, type Seguranca } from '../lib/seguranca.js';
+import { enviarConteudo, ligarCom } from '../lib/worker.js';
+import { normalizarTelefone } from '../lib/telefone.js';
 
 export const campaignsRouter = Router();
 campaignsRouter.use(exigirLogin, exigirEmpresa);
@@ -115,7 +117,7 @@ campaignsRouter.get('/:id/targets', async (req, res) => {
   const where = and(...conds);
   const [{ total }] = await db.select({ total: count() }).from(campaignTargets).where(where);
   const l = await db.select({ t: campaignTargets, conversationId: conversations.id }).from(campaignTargets)
-    .leftJoin(conversations, and(eq(conversations.connectionId, c.connectionId ?? 0), eq(conversations.phone, campaignTargets.phone)))
+    .leftJoin(conversations, and(sql`${conversations.connectionId} = coalesce(${campaignTargets.connectionId}, ${c.connectionId ?? 0})`, eq(conversations.phone, campaignTargets.phone)))
     .where(where).orderBy(asc(campaignTargets.id)).limit(per).offset((page - 1) * per);
   res.json({ targets: l.map(({ t: { astraRef: _a, ...t }, conversationId }) => ({ ...t, conversationId })), total, page, per });
 });
@@ -132,6 +134,8 @@ const criarSchema = z.object({
   name: z.string().trim().min(2, 'Dê um nome à campanha.').max(120),
   kind: z.enum(['message', 'call']),
   connectionId: z.number().int(),
+  connectionIds: z.array(z.number().int()).max(20).default([]),
+  mentionAll: z.boolean().default(false),
   messageType: z.enum(['text', 'image', 'video', 'audio', 'document', 'poll']).default('text'),
   text: z.string().max(4096).default(''),
   textVariants: z.array(z.string().max(4096)).max(10, 'No máximo 10 versões extras.').default([]),
@@ -157,10 +161,38 @@ const criarSchema = z.object({
     all: z.boolean().optional(),
     categoryIds: z.array(z.number().int()).optional(),
     contactIds: z.array(z.number().int()).optional(),
+    groups: z.array(z.object({ jid: z.string().regex(/@g\.us$/), name: z.string().max(120) })).max(200).optional(),
   }),
   start: z.boolean().default(false),
   scheduledAt: z.string().datetime({ offset: true }).nullable().optional(),
 });
+
+/** Confere o conteúdo da campanha (mensagem/ligação). Devolve o tipo final ou o erro em português. */
+function validarConteudo(d: Pick<z.infer<typeof criarSchema>, 'kind' | 'messageType' | 'text' | 'media' | 'callVideo' | 'buttons' | 'optOutButton' | 'pollOptions'>): { messageType: string } | { error: string } {
+  let messageType: string = d.messageType;
+  if (d.kind === 'call') {
+    if (!d.media) return ({ error: d.callVideo ? 'Envie o vídeo que vai passar na ligação.' : 'Envie o áudio que vai tocar na ligação.' });
+    const ok = d.callVideo ? d.media.mime.startsWith('video/') : (d.media.mime.startsWith('audio/') || d.media.mime.startsWith('video/'));
+    if (!ok) return ({ error: d.callVideo ? 'Pra ligação de vídeo, envie um arquivo de vídeo (MP4).' : 'Pra ligação de áudio, envie um arquivo de áudio (MP3, OGG, WAV…).' });
+    messageType = d.callVideo ? 'video' : 'audio';
+  } else if (messageType === 'text') {
+    if (!d.text.trim()) return ({ error: 'Escreva a mensagem.' });
+    if (d.buttons.length + (d.optOutButton ? 1 : 0) > 3) return ({ error: 'No máximo 3 botões (contando o "Não tenho interesse").' });
+    for (const b of d.buttons) {
+      if (b.type === 'cta_url' && !/^https?:\/\/\S+\.\S+/.test(b.value || '')) return ({ error: `O botão "${b.text}" precisa de um link começando com https://` });
+      if (b.type === 'cta_call' && (b.value || '').replace(/\D/g, '').length < 10) return ({ error: `O botão "${b.text}" precisa de um telefone com DDD.` });
+      if (b.type === 'cta_copy' && !b.value) return ({ error: `O botão "${b.text}" precisa do código a copiar.` });
+    }
+  } else if (messageType === 'poll') {
+    if (!d.text.trim()) return ({ error: 'Escreva a pergunta da enquete.' });
+    if (d.pollOptions.length < 2) return ({ error: 'A enquete precisa de pelo menos 2 opções.' });
+  } else {
+    if (!d.media) return ({ error: 'Envie o arquivo da mensagem.' });
+    const prefixo = { image: 'image/', video: 'video/', audio: 'audio/', document: '' }[messageType];
+    if (prefixo && !d.media.mime.startsWith(prefixo)) return ({ error: 'O arquivo não combina com o tipo de mensagem escolhido.' });
+  }
+  return { messageType };
+}
 
 campaignsRouter.post('/', async (req, res) => {
   const p = criarSchema.safeParse(req.body);
@@ -173,34 +205,24 @@ campaignsRouter.post('/', async (req, res) => {
   const seg = await efetiva(d.kind, { ...(d.minDelay ? { intervaloMin: d.minDelay } : {}), ...(d.maxDelay ? { intervaloMax: d.maxDelay } : {}), ...d.seguranca } as Partial<Seguranca>);
   if (d.kind === 'call' && seg.preMsgAtivo === false && (d.seguranca as any)?.preMsgAtivo && !seg.preMsgs.length) return res.status(400).json({ error: 'Escreva a mensagem que vai antes da ligação.' });
 
-  const [conn] = await db.select().from(connections).where(and(eq(connections.id, d.connectionId), eq(connections.tenantId, tid)));
-  if (!conn) return res.status(400).json({ error: 'Escolha um número de WhatsApp.' });
+  const ids = [...new Set([d.connectionId, ...d.connectionIds])];
+  const nums = await db.select().from(connections).where(and(inArray(connections.id, ids), eq(connections.tenantId, tid)));
+  const conn = nums.find(n => n.id === d.connectionId);
+  if (!conn || nums.length !== ids.length) return res.status(400).json({ error: 'Escolha um número de WhatsApp.' });
 
-  let messageType = d.messageType;
-  if (d.kind === 'call') {
-    if (!d.media) return res.status(400).json({ error: d.callVideo ? 'Envie o vídeo que vai passar na ligação.' : 'Envie o áudio que vai tocar na ligação.' });
-    const ok = d.callVideo ? d.media.mime.startsWith('video/') : (d.media.mime.startsWith('audio/') || d.media.mime.startsWith('video/'));
-    if (!ok) return res.status(400).json({ error: d.callVideo ? 'Pra ligação de vídeo, envie um arquivo de vídeo (MP4).' : 'Pra ligação de áudio, envie um arquivo de áudio (MP3, OGG, WAV…).' });
-    messageType = d.callVideo ? 'video' : 'audio';
-  } else if (messageType === 'text') {
-    if (!d.text.trim()) return res.status(400).json({ error: 'Escreva a mensagem.' });
-    if (d.buttons.length + (d.optOutButton ? 1 : 0) > 3) return res.status(400).json({ error: 'No máximo 3 botões (contando o "Não tenho interesse").' });
-    for (const b of d.buttons) {
-      if (b.type === 'cta_url' && !/^https?:\/\/\S+\.\S+/.test(b.value || '')) return res.status(400).json({ error: `O botão "${b.text}" precisa de um link começando com https://` });
-      if (b.type === 'cta_call' && (b.value || '').replace(/\D/g, '').length < 10) return res.status(400).json({ error: `O botão "${b.text}" precisa de um telefone com DDD.` });
-      if (b.type === 'cta_copy' && !b.value) return res.status(400).json({ error: `O botão "${b.text}" precisa do código a copiar.` });
-    }
-  } else if (messageType === 'poll') {
-    if (!d.text.trim()) return res.status(400).json({ error: 'Escreva a pergunta da enquete.' });
-    if (d.pollOptions.length < 2) return res.status(400).json({ error: 'A enquete precisa de pelo menos 2 opções.' });
-  } else {
-    if (!d.media) return res.status(400).json({ error: 'Envie o arquivo da mensagem.' });
-    const prefixo = { image: 'image/', video: 'video/', audio: 'audio/', document: '' }[messageType];
-    if (prefixo && !d.media.mime.startsWith(prefixo)) return res.status(400).json({ error: 'O arquivo não combina com o tipo de mensagem escolhido.' });
-  }
+  const v = validarConteudo(d);
+  if ('error' in v) return res.status(400).json({ error: v.error });
+  const messageType = v.messageType;
   if (d.media && !fs.existsSync(arquivoUpload(d.media.path))) return res.status(400).json({ error: 'O arquivo enviado não foi encontrado. Envie de novo.' });
 
-  // público
+  // público: grupos do WhatsApp (a mensagem vai DENTRO do grupo)
+  type Destino = { id: number | null; name: string; phone: string; isGroup?: boolean };
+  let publico: Destino[] = [];
+  let descadastrados = 0, semWhats = 0;
+  if (d.audience.groups?.length) {
+    if (d.kind === 'call') return res.status(400).json({ error: 'Ligação não pode ser feita pra grupo. Use uma campanha de mensagem.' });
+    publico = d.audience.groups.map(g => ({ id: null, name: g.name, phone: g.jid, isGroup: true }));
+  } else {
   let where: SQL | undefined;
   if (d.audience.contactIds?.length) where = and(eq(contacts.tenantId, tid), inArray(contacts.id, d.audience.contactIds));
   else if (d.audience.categoryIds?.length) where = and(eq(contacts.tenantId, tid), inArray(contacts.categoryId, d.audience.categoryIds));
@@ -208,14 +230,15 @@ campaignsRouter.post('/', async (req, res) => {
   if (!where) return res.status(400).json({ error: 'Escolha pra quem enviar.' });
   const todos = await db.select({ id: contacts.id, name: contacts.name, phone: contacts.phone, optOut: contacts.optOut, waStatus: contacts.waStatus }).from(contacts).where(where).orderBy(asc(contacts.id));
   // quem pediu pra sair nunca entra; sem WhatsApp (validado) fica de fora se a opção estiver ligada
-  const descadastrados = todos.filter(x => x.optOut).length;
-  const semWhats = d.skipInvalid ? todos.filter(x => !x.optOut && x.waStatus === 'invalid').length : 0;
-  const publico = todos.filter(x => !x.optOut && !(d.skipInvalid && x.waStatus === 'invalid'));
+  descadastrados = todos.filter(x => x.optOut).length;
+  semWhats = d.skipInvalid ? todos.filter(x => !x.optOut && x.waStatus === 'invalid').length : 0;
+  publico = todos.filter(x => !x.optOut && !(d.skipInvalid && x.waStatus === 'invalid'));
   if (!publico.length) return res.status(400).json({ error: todos.length ? 'Todos os contatos desse público se descadastraram ou não têm WhatsApp.' : 'Nenhum contato nesse público.' });
+  }
 
   const c = await db.transaction(async tx => {
     const [c] = await tx.insert(campaigns).values({
-      tenantId: tid, connectionId: conn.id, createdBy: req.auth!.userId, name: d.name, kind: d.kind,
+      tenantId: tid, connectionId: conn.id, connectionIds: ids, mentionAll: d.mentionAll, createdBy: req.auth!.userId, name: d.name, kind: d.kind,
       status: agendada ? 'scheduled' : d.start ? 'running' : 'draft', scheduledAt: agendada, messageType, text: d.text,
       textVariants: d.kind === 'call' || messageType === 'audio' ? [] : d.textVariants.filter(v => v.trim()),
       buttons: messageType === 'text' && d.kind === 'message' ? d.buttons : [], optOutButton: messageType === 'text' && d.kind === 'message' && d.optOutButton,
@@ -225,11 +248,83 @@ campaignsRouter.post('/', async (req, res) => {
       startedAt: d.start && !agendada ? new Date() : null,
     }).returning();
     for (let i = 0; i < publico.length; i += 1000) {
-      await tx.insert(campaignTargets).values(publico.slice(i, i + 1000).map(x => ({ campaignId: c.id, contactId: x.id, name: x.name, phone: x.phone })));
+      await tx.insert(campaignTargets).values(publico.slice(i, i + 1000).map(x => ({ campaignId: c.id, contactId: x.id, name: x.name, phone: x.phone, isGroup: !!x.isGroup })));
     }
     return c;
   });
   res.status(201).json({ campaign: publica(c), total: publico.length, excluded: { optOut: descadastrados, noWhatsapp: semWhats } });
+});
+
+// --- duplicar / reenviar ------------------------------------------------------------------------
+// Cria uma campanha nova (rascunho) a partir desta, com todos ou só quem não respondeu/não leu/falhou.
+// Dá pra trocar o texto. Quem pediu pra sair fica de fora.
+campaignsRouter.post('/:id/duplicate', async (req, res) => {
+  const c = await daEmpresa(req);
+  if (!c) return res.status(404).json({ error: 'Campanha não encontrada.' });
+  const p = z.object({
+    publico: z.enum(['todos', 'nao_responderam', 'nao_leram', 'falharam', 'nao_atenderam']).default('todos'),
+    name: z.string().trim().min(2).max(120).optional(),
+    text: z.string().max(4096).optional(),
+    textVariants: z.array(z.string().max(4096)).max(10).optional(),
+  }).safeParse(req.body);
+  if (!p.success) return res.status(400).json({ error: 'Dados inválidos.' });
+  const d = p.data;
+  const filtro: Record<string, SQL> = {
+    todos: sql`true`,
+    nao_responderam: sql`${campaignTargets.repliedAt} is null and ${campaignTargets.status} in ('sent','completed','no-answer')`,
+    nao_leram: sql`${campaignTargets.readAt} is null and ${campaignTargets.repliedAt} is null and ${campaignTargets.status} = 'sent'`,
+    falharam: sql`${campaignTargets.status} = 'failed'`,
+    nao_atenderam: sql`${campaignTargets.status} = 'no-answer'`,
+  };
+  const alvos = await db.select({ contactId: campaignTargets.contactId, name: campaignTargets.name, phone: campaignTargets.phone, isGroup: campaignTargets.isGroup })
+    .from(campaignTargets)
+    .leftJoin(contacts, and(eq(contacts.tenantId, c.tenantId), eq(contacts.phone, campaignTargets.phone)))
+    .where(and(eq(campaignTargets.campaignId, c.id), filtro[d.publico], sql`coalesce(${contacts.optOut}, false) = false and ${campaignTargets.optedOut} = false`))
+    .orderBy(asc(campaignTargets.id));
+  if (!alvos.length) return res.status(400).json({ error: 'Ninguém nesse grupo pra receber de novo.' });
+  const ROT: Record<string, string> = { todos: 'cópia', nao_responderam: 'quem não respondeu', nao_leram: 'quem não leu', falharam: 'quem falhou', nao_atenderam: 'quem não atendeu' };
+  const nova = await db.transaction(async tx => {
+    const { id: _i, status: _s, createdAt: _c, startedAt: _st, finishedAt: _f, nextAt: _n, pauseReason: _p, waitReason: _w, scheduledAt: _sc, ...resto } = c;
+    const [n] = await tx.insert(campaigns).values({
+      ...resto, status: 'draft', createdBy: req.auth!.userId,
+      name: d.name || `${c.name} (${ROT[d.publico]})`.slice(0, 120),
+      ...(d.text !== undefined ? { text: d.text } : {}), ...(d.textVariants !== undefined ? { textVariants: d.textVariants.filter(t => t.trim()) } : {}),
+    }).returning();
+    for (let i = 0; i < alvos.length; i += 1000) {
+      await tx.insert(campaignTargets).values(alvos.slice(i, i + 1000).map(a => ({ campaignId: n.id, contactId: a.contactId, name: a.name, phone: a.phone, isGroup: a.isGroup })));
+    }
+    return n;
+  });
+  res.status(201).json({ campaign: publica(nova), total: alvos.length });
+});
+
+// --- enviar teste pra mim -----------------------------------------------------------------------
+campaignsRouter.post('/test', async (req, res) => {
+  const p = criarSchema.pick({ kind: true, connectionId: true, messageType: true, text: true, textVariants: true, media: true, callVideo: true, buttons: true, optOutButton: true, footer: true, pollOptions: true, pollMulti: true })
+    .extend({ phone: z.string() }).safeParse(req.body);
+  if (!p.success) return res.status(400).json({ error: p.error.issues[0].message });
+  const d = p.data;
+  const tel = normalizarTelefone(d.phone);
+  if (!tel) return res.status(400).json({ error: 'Informe o seu WhatsApp com DDD.' });
+  const v = validarConteudo(d);
+  if ('error' in v) return res.status(400).json({ error: v.error });
+  if (d.media && !fs.existsSync(arquivoUpload(d.media.path))) return res.status(400).json({ error: 'O arquivo não foi encontrado. Envie de novo.' });
+  const [conn] = await db.select().from(connections).where(and(eq(connections.id, d.connectionId), eq(connections.tenantId, tenantDe(req))));
+  if (!conn) return res.status(400).json({ error: 'Escolha um número de WhatsApp.' });
+  if (!(await estadoDe(conn.sessionId))?.paired) return res.status(400).json({ error: `O número "${conn.name}" está desconectado. Conecte em Conexões pra testar.` });
+  try {
+    if (d.kind === 'call') {
+      await ligarCom(conn, { mediaPath: d.media!.path, callVideo: d.callVideo }, tel, 40_000);
+      return res.json({ ok: true, kind: 'call' });
+    }
+    await enviarConteudo(conn, {
+      messageType: v.messageType, text: d.text, textVariants: [], buttons: d.buttons.map(b => ({ ...b, value: b.value })), optOutButton: d.optOutButton, footer: d.footer,
+      pollOptions: d.pollOptions, pollMulti: d.pollMulti, mediaPath: d.media?.path ?? null, mediaMime: d.media?.mime ?? null, mediaName: d.media?.name ?? null, typing: false, mentionAll: false,
+    }, tel, (req.auth!.name || '').split(' ')[0]);
+    res.json({ ok: true, kind: 'message' });
+  } catch (e) {
+    res.status(400).json({ error: 'Não foi possível enviar o teste: ' + ((e as Error).message || 'erro') });
+  }
 });
 
 // --- controle -----------------------------------------------------------------------------------

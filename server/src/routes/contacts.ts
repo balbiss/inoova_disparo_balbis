@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { and, asc, count, desc, eq, ilike, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/client.js';
-import { categories, contacts, tenants } from '../db/schema.js';
+import { categories, connections, contacts, tenants } from '../db/schema.js';
+import { astra } from '../lib/astra.js';
 import { exigirEmpresa, exigirLogin, tenantDe } from '../lib/auth.js';
 import { normalizarTelefone } from '../lib/telefone.js';
 import { iniciarValidacao, pararValidacao, progressoDe } from '../lib/validacao.js';
@@ -137,19 +138,12 @@ contactsRouter.post('/delete', async (req, res) => {
 });
 
 // importação: a planilha é lida no navegador e chega aqui como linhas {name, phone}
-contactsRouter.post('/import', async (req, res) => {
-  const p = z.object({
-    rows: z.array(z.object({ name: z.any().optional(), phone: z.any() })).max(50_000),
-    categoryId: z.number().int().nullable().optional(),
-  }).safeParse(req.body);
-  if (!p.success) return res.status(400).json({ error: 'Planilha inválida.' });
-  const tid = tenantDe(req);
-  if (!(await categoriaValida(tid, p.data.categoryId))) return res.status(400).json({ error: 'Categoria inválida.' });
-
+/** Importa linhas {name, phone} (planilha, lista colada ou participantes de grupo). */
+async function importarLinhas(tid: number, rows: { name?: unknown; phone?: unknown }[], categoryId: number | null | undefined) {
   const vistos = new Set<string>();
   const validos: { name: string; phone: string }[] = [];
   let invalidos = 0;
-  for (const r of p.data.rows) {
+  for (const r of rows) {
     const phone = normalizarTelefone(r.phone);
     if (!phone) { invalidos++; continue }
     if (vistos.has(phone)) continue;
@@ -165,10 +159,9 @@ contactsRouter.post('/import', async (req, res) => {
   }
   const novos = validos.filter(v => !existentes.has(v.phone));
   const lim = await cabe(tid, novos.length);
-  if (!lim.ok) return res.status(400).json({ error: `Essa planilha tem ${novos.length} contatos novos e seu plano permite ${lim.max} (você já tem ${lim.atual}).` });
-
+  if (!lim.ok) throw new Error(`São ${novos.length} contatos novos e seu plano permite ${lim.max} (você já tem ${lim.atual}).`);
   for (let i = 0; i < validos.length; i += 500) {
-    const fatia = validos.slice(i, i + 500).map(v => ({ tenantId: tid, name: v.name, phone: v.phone, categoryId: p.data.categoryId ?? null }));
+    const fatia = validos.slice(i, i + 500).map(v => ({ tenantId: tid, name: v.name, phone: v.phone, categoryId: categoryId ?? null }));
     await db.insert(contacts).values(fatia).onConflictDoUpdate({
       target: [contacts.tenantId, contacts.phone],
       set: {
@@ -177,7 +170,46 @@ contactsRouter.post('/import', async (req, res) => {
       },
     });
   }
-  res.json({ created: novos.length, updated: validos.length - novos.length, invalid: invalidos, duplicatedInFile: p.data.rows.length - invalidos - validos.length });
+  return { created: novos.length, updated: validos.length - novos.length, invalid: invalidos, duplicatedInFile: rows.length - invalidos - validos.length };
+}
+
+// importação: a planilha é lida no navegador e chega aqui como linhas {name, phone}
+contactsRouter.post('/import', async (req, res) => {
+  const p = z.object({
+    rows: z.array(z.object({ name: z.any().optional(), phone: z.any() })).max(50_000),
+    categoryId: z.number().int().nullable().optional(),
+  }).safeParse(req.body);
+  if (!p.success) return res.status(400).json({ error: 'Planilha inválida.' });
+  const tid = tenantDe(req);
+  if (!(await categoriaValida(tid, p.data.categoryId))) return res.status(400).json({ error: 'Categoria inválida.' });
+  try { res.json(await importarLinhas(tid, p.data.rows, p.data.categoryId)) } catch (e) { res.status(400).json({ error: (e as Error).message }) }
+});
+
+// extrair contatos de grupos do WhatsApp: os participantes viram contatos (pra mandar individual)
+contactsRouter.post('/import-groups', async (req, res) => {
+  const p = z.object({ connectionId: z.number().int(), groupJids: z.array(z.string()).min(1).max(50), categoryId: z.number().int().nullable().optional() }).safeParse(req.body);
+  if (!p.success) return res.status(400).json({ error: 'Escolha pelo menos um grupo.' });
+  const tid = tenantDe(req);
+  const [conn] = await db.select().from(connections).where(and(eq(connections.id, p.data.connectionId), eq(connections.tenantId, tid)));
+  if (!conn) return res.status(400).json({ error: 'Número não encontrado.' });
+  if (!(await categoriaValida(tid, p.data.categoryId))) return res.status(400).json({ error: 'Categoria inválida.' });
+  let grupos: any[];
+  try { grupos = await astra<any[]>('GET', `/api/sessions/${encodeURIComponent(conn.sessionId)}/groups`, undefined, { timeoutMs: 60_000 }) }
+  catch (e) { return res.status(400).json({ error: (e as { status?: number }).status === 503 ? `O número "${conn.name}" está desconectado.` : 'Não foi possível ler os grupos agora.' }) }
+  const meu = String(conn.phone || '').replace(/\D/g, '');
+  const rows: { name: string; phone: string }[] = [];
+  let semTelefone = 0;
+  for (const g of grupos || []) {
+    if (!p.data.groupJids.includes(String(g.jid || g.id))) continue;
+    for (const pt of g.participants || []) {
+      const tel = String(pt.phone || '').replace(/\D/g, '');
+      if (!tel) { semTelefone++; continue } // participante com número escondido (LID) — o WhatsApp não revela
+      if (meu && tel.slice(-8) === meu.slice(-8)) continue;
+      rows.push({ name: String(pt.name || ''), phone: tel });
+    }
+  }
+  try { res.json({ ...(await importarLinhas(tid, rows, p.data.categoryId)), hidden: semTelefone, participants: rows.length }) }
+  catch (e) { res.status(400).json({ error: (e as Error).message }) }
 });
 
 // --- validação no WhatsApp ----------------------------------------------------------------------
