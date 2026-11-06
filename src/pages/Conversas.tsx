@@ -76,7 +76,7 @@ function Midia({ m }: { m: Msg }) {
 export default function Conversas() {
   const [params, setParams] = useSearchParams();
   const aberta = Number(params.get('c')) || null;
-  const [filtro, setFiltro] = useState<'respondidas' | 'nao_lidas' | 'todas'>('respondidas');
+  const [filtro, setFiltro] = useState<'respondidas' | 'nao_lidas' | 'todas'>('todas');
   const [q, setQ] = useState('');
   const [lista, setLista] = useState<Resumo[] | null>(null);
   const [total, setTotal] = useState(0);
@@ -111,7 +111,7 @@ export default function Conversas() {
             <Search size={15} color="var(--muted)" style={{ position: 'absolute', left: 10, top: 11 }} />
             <input style={{ ...inputStyle, paddingLeft: 32, background: 'var(--card-2)', border: '1px solid transparent' }} placeholder="Buscar nome ou telefone" value={q} onChange={e => setQ(e.target.value)} />
           </div>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>{chip('respondidas', 'Responderam')}{chip('nao_lidas', 'Não lidas')}{chip('todas', 'Todas')}</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>{chip('todas', 'Todas')}{chip('nao_lidas', 'Não lidas')}{chip('respondidas', 'Responderam')}</div>
         </div>
         <div style={{ overflowY: 'auto', flex: 1 }}>
           {!lista ? <Carregando /> : lista.length === 0 ? (
