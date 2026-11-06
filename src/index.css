@@ -63,7 +63,8 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(0,168,132,.3
 
 /* Conversas: no celular mostra a lista OU o chat */
 @media (max-width: 900px) {
-  .conversas { grid-template-columns: 1fr !important; height: calc(100vh - 60px - 64px) !important; }
+  .conversas { grid-template-columns: 1fr !important; height: calc(100dvh - 60px - 20px) !important; }
+  .app-main.app-main-chat { padding: 10px 8px !important; }
   .conversas.com-chat .conv-lista { display: none !important; }
   .conversas:not(.com-chat) .conv-chat { display: none !important; }
 }

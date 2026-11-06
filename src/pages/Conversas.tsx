@@ -100,8 +100,8 @@ export default function Conversas() {
   );
 
   return (
-    <div className={'conversas' + (aberta ? ' com-chat' : '')} style={{ display: 'grid', gridTemplateColumns: '340px minmax(0, 1fr)', height: 'calc(100vh - 60px - 44px)', minHeight: 460, background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 4, overflow: 'hidden' }}>
-      <aside className="conv-lista" style={{ borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+    <div className={'conversas' + (aberta ? ' com-chat' : '')} style={{ display: 'grid', gridTemplateColumns: '340px minmax(0, 1fr)', gridTemplateRows: 'minmax(0, 1fr)', height: 'calc(100dvh - 60px - 28px)', minHeight: 420, background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 4, overflow: 'hidden' }}>
+      <aside className="conv-lista" style={{ borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, height: '100%' }}>
         <div style={{ padding: '14px 14px 10px', borderBottom: '1px solid var(--line)' }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 10 }}>
             <h1 style={{ fontSize: 18, margin: 0, textTransform: 'uppercase', letterSpacing: '.04em' }}>Conversas</h1>
@@ -142,7 +142,7 @@ export default function Conversas() {
         </div>
       </aside>
 
-      <section className="conv-chat" style={{ minWidth: 0, display: 'flex', flexDirection: 'column', background: '#EFEAE2' }}>
+      <section className="conv-chat" style={{ minWidth: 0, minHeight: 0, height: '100%', display: 'flex', flexDirection: 'column', background: '#EFEAE2', overflow: 'hidden' }}>
         {aberta ? <Chat key={aberta} id={aberta} onVoltar={() => abrir(null)} onMudou={carregarLista} /> : (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: 30, color: 'var(--muted)', background: 'var(--card-2)' }}>
             <span style={{ width: 72, height: 72, borderRadius: 99, background: 'var(--verde-soft)', color: 'var(--verde-escuro)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}><MessageCircle size={32} /></span>
@@ -239,7 +239,7 @@ function Chat({ id, onVoltar, onMudou }: { id: number; onVoltar: () => void; onM
 
   return (
     <>
-      <header style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '10px 14px', background: 'var(--card)', borderBottom: '1px solid var(--line)' }}>
+      <header style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 11, padding: '10px 14px', background: 'var(--card)', borderBottom: '1px solid var(--line)' }}>
         <button className="so-mobile" onClick={onVoltar} aria-label="Voltar" style={{ border: 'none', background: 'none', padding: 4, alignItems: 'center' }}><ArrowLeft size={20} /></button>
         <Avatar url={c.avatarUrl} nome={c.name || c.waName || ''} size={40} />
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -254,7 +254,7 @@ function Chat({ id, onVoltar, onMudou }: { id: number; onVoltar: () => void; onM
         </button>
       </header>
 
-      <div ref={caixa} onScroll={aoRolar} style={{ flex: 1, overflowY: 'auto', padding: '14px 5%', backgroundImage: 'radial-gradient(rgba(0,0,0,.035) 1px, transparent 1px)', backgroundSize: '14px 14px' }}>
+      <div ref={caixa} onScroll={aoRolar} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '14px 5%', backgroundImage: 'radial-gradient(rgba(0,0,0,.035) 1px, transparent 1px)', backgroundSize: '14px 14px' }}>
         {maisAntigas && msgs.length > 0 && <div style={{ textAlign: 'center', marginBottom: 10 }}><button onClick={antigas} style={btn('ghost', { minHeight: 28, fontSize: 12 })}>Mensagens anteriores</button></div>}
         {msgs.map(m => {
           const dia = new Date(m.createdAt).toDateString();
@@ -289,7 +289,7 @@ function Chat({ id, onVoltar, onMudou }: { id: number; onVoltar: () => void; onM
         <div ref={fim} />
       </div>
 
-      <footer style={{ background: '#F0F2F5', padding: '8px 12px', borderTop: '1px solid var(--line)' }}>
+      <footer style={{ flex: 'none', background: '#F0F2F5', padding: '8px 12px', borderTop: '1px solid var(--line)' }}>
         {anexo && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: '#fff', borderRadius: 6, marginBottom: 6, fontSize: 13 }}>
             <Paperclip size={15} /> <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{anexo.name}</span>

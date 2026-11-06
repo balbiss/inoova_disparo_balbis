@@ -132,7 +132,7 @@ export function AppShell() {
             )}
           </div>
         </header>
-        <main className="app-main" style={{ padding: '22px 26px 48px', flex: 1, width: '100%', maxWidth: 1400 }}>
+        <main className={'app-main' + (loc.pathname.startsWith('/conversas') ? ' app-main-chat' : '')} style={{ padding: loc.pathname.startsWith('/conversas') ? '16px 20px 12px' : '22px 26px 48px', flex: 1, width: '100%', maxWidth: loc.pathname.startsWith('/conversas') ? 'none' : 1400 }}>
           <Outlet />
         </main>
       </div>
