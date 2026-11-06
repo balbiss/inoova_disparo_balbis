@@ -3,7 +3,7 @@ import { api, salvarSessao, type Usuario } from '../lib/api';
 import { Logo } from '../components/Logo';
 
 // Login no layout da entrada de conta do Kommo (igual ao Clara v2): painel colorido com o formulário
-// + área da marca. Aqui o painel é o verde-escuro do WhatsApp.
+// + área da marca. Aqui o painel é o verde-escuro do WhatsApp, à DIREITA (pedido do dono, 05/11).
 const field: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, height: 40, padding: '0 12px', background: '#fff', borderRadius: 4, marginBottom: 14 };
 const inputCss: CSSProperties = { flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'none', fontSize: 15, color: '#111B21' };
 
@@ -30,7 +30,7 @@ export default function Login() {
   };
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex' }}>
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'row-reverse' }}>
       <aside className="login-painel" style={{ width: 380, flex: 'none', background: 'var(--teal)', color: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 38px', position: 'relative' }}>
         <div style={{ marginBottom: 40 }}><Logo size={42} fonte={24} /></div>
         <form onSubmit={entrar} style={{ width: '100%' }}>
