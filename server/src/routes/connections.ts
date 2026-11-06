@@ -27,9 +27,10 @@ const fotos = new Map<number, { url: string | null; at: number; phone: string }>
 async function fotoDoNumero(c: typeof connections.$inferSelect, phone: string | null, conectado: boolean) {
   if (!phone || !conectado) return fotos.get(c.id)?.url ?? null;
   const f = fotos.get(c.id);
-  if (f && f.phone === phone && Date.now() - f.at < 12 * 3600_000) return f.url;
+  // com foto: guarda 12 h; sem foto (ou falhou logo após conectar, ainda sincronizando): tenta de novo em 3 min
+  if (f && f.phone === phone && Date.now() - f.at < (f.url ? 12 * 3600_000 : 3 * 60_000)) return f.url;
   let url: string | null = null;
-  try { const r = await astra<{ url?: string; profilePictureURL?: string }>('GET', `/api/sessions/${encodeURIComponent(c.sessionId)}/contacts/${phone}/picture?preview=true`, undefined, { timeoutMs: 10_000 }); url = r?.url || r?.profilePictureURL || null } catch { /* sem foto */ }
+  try { const r = await astra<{ url?: string; profilePictureURL?: string }>('GET', `/api/sessions/${encodeURIComponent(c.sessionId)}/contacts/${phone}/picture?preview=true`, undefined, { timeoutMs: 10_000 }); url = r?.url || r?.profilePictureURL || null } catch (e: any) { console.warn('[conexao] foto do número', c.id, e?.message || e) }
   fotos.set(c.id, { url, at: Date.now(), phone });
   return url;
 }
