@@ -83,3 +83,5 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(0,168,132,.3
 .app-sidebar nav button:not([aria-current]):hover, aside nav button:not([aria-current]):hover { background: rgba(255,255,255,.07) !important; }
 
 @media (max-width: 900px) { .grid-grupos { grid-template-columns: minmax(0, 1fr) !important; } }
+
+@media (max-width: 1000px) { .grid-leads { grid-template-columns: minmax(0, 1fr) !important; } .form-leads { grid-template-columns: minmax(0, 1fr) !important; } }

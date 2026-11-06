@@ -139,7 +139,7 @@ contactsRouter.post('/delete', async (req, res) => {
 
 // importação: a planilha é lida no navegador e chega aqui como linhas {name, phone}
 /** Importa linhas {name, phone} (planilha, lista colada ou participantes de grupo). */
-async function importarLinhas(tid: number, rows: { name?: unknown; phone?: unknown }[], categoryId: number | null | undefined) {
+export async function importarLinhas(tid: number, rows: { name?: unknown; phone?: unknown }[], categoryId: number | null | undefined) {
   const vistos = new Set<string>();
   const validos: { name: string; phone: string }[] = [];
   let invalidos = 0;

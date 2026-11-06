@@ -22,6 +22,8 @@ import { webhooksRouter } from './routes/webhooks.js';
 import { conversationsRouter } from './routes/conversations.js';
 import { extrasRouter } from './routes/extras.js';
 import { callsRouter, tratarUpgradeLigacao } from './routes/calls.js';
+import { leadsRouter } from './routes/leads.js';
+import { iniciarExtrator } from './lib/leads.js';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -39,6 +41,7 @@ app.use('/api/contacts', contactsRouter);
 app.use('/api/campaigns', campaignsRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/calls', callsRouter);
+app.use('/api/lead-searches', leadsRouter);
 app.use('/api', extrasRouter);
 app.use('/api/conversations', conversationsRouter);
 if (process.env.ENABLE_TEST_ROUTES === '1' && process.env.NODE_ENV !== 'production') {
@@ -77,6 +80,7 @@ async function iniciar() {
   iniciarEventosAstra();
   iniciarWorker();
   iniciarSaude();
+  iniciarExtrator();
   const servidor = app.listen(PORT, () => console.log(`[api] ouvindo na porta ${PORT}`));
   // áudio da ligação pelo navegador (WebSocket)
   servidor.on('upgrade', (req, socket, head) => {

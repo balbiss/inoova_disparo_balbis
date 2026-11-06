@@ -1,0 +1,56 @@
+// Extrator de leads no navegador (com o gosom simulado: server/scripts/gmaps-mock.mjs).
+// Uso: PW=<playwright-core> node tests/ui-leads.cjs [http://localhost:5195] [pasta-dos-prints]
+const { chromium } = require(process.env.PW || 'playwright-core');
+const path = require('path');
+const fs = require('fs');
+const WEB = process.argv[2] || 'http://localhost:5195';
+const API = WEB.replace(':5195', ':3020') + '/api';
+const PRINTS = process.argv[3] || path.join(__dirname, 'prints');
+fs.mkdirSync(PRINTS, { recursive: true });
+let ok = 0, falhas = 0;
+const check = (c, nome) => { if (c) { ok++; console.log('  ✓', nome) } else { falhas++; console.log('  ✗', nome) } };
+const j = async (m, p, t, b) => (await fetch(API + p, { method: m, headers: { 'Content-Type': 'application/json', ...(t ? { Authorization: 'Bearer ' + t } : {}) }, body: b ? JSON.stringify(b) : undefined })).json().catch(() => ({}));
+const sim = (sel, page, ms = 8000) => page.waitForSelector(sel, { timeout: ms }).then(() => true).catch(() => false);
+
+(async () => {
+  const suf = Date.now().toString(36);
+  const SA = (await j('POST', '/auth/login', null, { email: 'admin@teste.local', password: '123456' })).token;
+  const ten = (await j('POST', '/admin/tenants', SA, { name: 'Loja Leads', adminName: 'Ana Souza', adminEmail: `uileads-${suf}@teste.local`, adminPassword: 'senha123' })).tenant;
+  const login = await j('POST', '/auth/login', null, { email: `uileads-${suf}@teste.local`, password: 'senha123' });
+  const browser = await chromium.launch({ executablePath: process.env.CHROME || 'C:/Program Files/Google/Chrome/Application/chrome.exe' });
+  const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
+  const errosConsole = [];
+  page.on('pageerror', e => errosConsole.push(e.message));
+  await page.goto(WEB + '/login');
+  await page.evaluate(([t, u]) => { localStorage.setItem('token', t); localStorage.setItem('usuario', JSON.stringify(u)) }, [login.token, login.user]);
+  await page.goto(WEB + '/leads');
+  check(await sim('text=Faça sua primeira busca', page), 'tela vazia explica o que fazer');
+  check(await page.isVisible('nav >> text=Extrator de leads'), 'item no menu');
+  await page.fill('input[placeholder^="Ex.: loja de móveis"]', 'loja de móveis');
+  await page.fill('input[placeholder="Cidade, bairro ou estado"]', 'Ananindeua, PA');
+  await page.click('button:has-text("Buscar")');
+  check(await sim('text=Procurando empresas no Google Maps', page), 'mostra que está buscando');
+  await page.screenshot({ path: path.join(PRINTS, 'l1-buscando.png') });
+  check(await sim('text=Móveis Bela Casa', page, 40000), 'resultados aparecem sozinhos quando termina');
+  check(await page.locator('tbody tr').count() === 2, 'filtro "Só celular" vem marcado (2 celulares)');
+  await page.click('button:has-text("Com telefone")');
+  check(await page.locator('tbody tr').count() === 3, '"Com telefone" mostra 3');
+  await page.click('button:has-text("Todos")');
+  check(await page.locator('tbody tr').count() === 4, '"Todos" mostra 4');
+  await page.click('button:has-text("Só celular")');
+  await page.screenshot({ path: path.join(PRINTS, 'l2-resultados.png') });
+  await page.click('button:has-text("Salvar nos contatos")');
+  check(await sim('.swal2-toast:has-text("contato(s) salvo")', page), 'salva nos contatos');
+  check(await sim('td >> text=Salvo', page), 'marca como salvo');
+  const cats = (await j('GET', '/contacts/categories', login.token)).categories;
+  check(cats.some(c => c.name === 'loja de móveis - Ananindeua, PA' && c.total === 2), 'cria a categoria com o nome da busca');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(600);
+  check(!(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)), 'celular 390px sem rolagem lateral');
+  await page.screenshot({ path: path.join(PRINTS, 'l3-celular.png'), fullPage: true });
+  check(errosConsole.length === 0, 'sem erro no console ' + (errosConsole.length ? JSON.stringify(errosConsole.slice(0, 2)) : ''));
+  await browser.close();
+  await j('PATCH', `/admin/tenants/${ten.id}`, SA, { active: false }); await j('DELETE', `/admin/tenants/${ten.id}`, SA);
+  console.log(`\n${ok} ok, ${falhas} falha(s)`);
+  process.exit(falhas ? 1 : 0);
+})().catch(e => { console.error(e); process.exit(1) });

@@ -43,6 +43,13 @@
       "when": 1793934360187,
       "tag": "0005_pacote_recursos",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793936044774,
+      "tag": "0006_extrator_leads",
+      "breakpoints": true
     }
   ]
 }

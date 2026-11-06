@@ -191,6 +191,41 @@ export const conversationTags = pgTable('conversation_tags', {
   tagId: integer('tag_id').notNull().references(() => tags.id, { onDelete: 'cascade' }),
 }, t => [uniqueIndex('conversation_tags_uq').on(t.conversationId, t.tagId), index('conversation_tags_tag_idx').on(t.tagId)]);
 
+// Extrator de leads do Google Maps (gosom/google-maps-scraper rodando na rede interna)
+// status: pending | working | done | failed
+export const leadSearches = pgTable('lead_searches', {
+  id: serial('id').primaryKey(),
+  tenantId: integer('tenant_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
+  query: text('query').notNull(),
+  location: text('location').notNull().default(''),
+  maxResults: integer('max_results').notNull().default(50),
+  withEmail: boolean('with_email').notNull().default(false),
+  jobId: text('job_id'),
+  status: text('status').notNull().default('pending'),
+  total: integer('total').notNull().default(0),
+  error: text('error'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp('finished_at', { withTimezone: true }),
+}, t => [index('lead_searches_tenant_idx').on(t.tenantId, t.createdAt), index('lead_searches_status_idx').on(t.status)]);
+
+export const leads = pgTable('leads', {
+  id: serial('id').primaryKey(),
+  searchId: integer('search_id').notNull().references(() => leadSearches.id, { onDelete: 'cascade' }),
+  name: text('name').notNull().default(''),
+  phone: text('phone'),            // normalizado (55DD…); null se não tem
+  phoneRaw: text('phone_raw'),
+  mobile: boolean('mobile').notNull().default(false), // celular brasileiro (mais chance de ter WhatsApp)
+  category: text('category').notNull().default(''),
+  address: text('address').notNull().default(''),
+  website: text('website').notNull().default(''),
+  emails: text('emails').notNull().default(''),
+  rating: text('rating'),
+  reviewCount: integer('review_count'),
+  link: text('link').notNull().default(''),
+  imported: boolean('imported').notNull().default(false),
+}, t => [index('leads_search_idx').on(t.searchId)]);
+
 // Configurações do sistema (superadmin): chave → JSON. Ex.: 'antiban' = padrões e limites de segurança.
 export const settings = pgTable('settings', {
   key: text('key').primaryKey(),

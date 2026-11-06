@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Telefone } from './Telefone';
 import { notificar, somMensagem } from '../lib/som';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { BellRing, Building2, MessagesSquare, ChevronUp, KeyRound, LayoutDashboard, LogOut, Megaphone, Menu, MessageCircle, PanelLeft, ShieldCheck, Smartphone, Users, UsersRound, X } from 'lucide-react';
+import { BellRing, Building2, MapPinned, MessagesSquare, ChevronUp, KeyRound, LayoutDashboard, LogOut, Megaphone, Menu, MessageCircle, PanelLeft, ShieldCheck, Smartphone, Users, UsersRound, X } from 'lucide-react';
 import { api, erro, getUsuario, ok, sair, salvarSessao, getToken, type Usuario } from '../lib/api';
 import { Logo, LogoMarca } from './Logo';
 import { Campo, Modal, btn, inputStyle } from './ui';
@@ -21,6 +21,7 @@ function menuDe(u: Usuario | null, naoLidas: number): Item[] {
     { to: '/conversas', label: 'Conversas', icon: <MessageCircle size={20} />, badge: naoLidas },
     { to: '/contatos', label: 'Contatos', icon: <UsersRound size={20} /> },
     { to: '/grupos', label: 'Grupos', icon: <MessagesSquare size={20} /> },
+    { to: '/leads', label: 'Extrator de leads', icon: <MapPinned size={20} /> },
     { to: '/conexoes', label: 'Conexões', icon: <Smartphone size={20} /> },
   ];
   if (u.role === 'admin') l.push({ to: '/equipe', label: 'Equipe', icon: <Users size={20} /> });

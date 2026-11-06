@@ -1,0 +1,64 @@
+# InoovaDisparo — stack de produção (Docker Swarm / Portainer, Traefik na rede externa "inoovawebpro").
+# Variáveis da stack: DOMINIO, IMAGEM, DB_PASSWORD, JWT_SECRET, SUPERADMIN_EMAIL, SUPERADMIN_PASSWORD,
+#                     ASTRACALLS_URL, ASTRACALLS_API_KEY
+# O extrator de leads (gosom) e o banco ficam SÓ na rede interna: não têm porta pública
+# (o gosom não tem senha nenhuma — só a API do InoovaDisparo fala com ele).
+version: '3.8'
+
+services:
+  app:
+    image: ${IMAGEM}
+    environment:
+      - DATABASE_URL=postgres://disparo:${DB_PASSWORD}@postgres:5432/disparo
+      - JWT_SECRET=${JWT_SECRET}
+      - SUPERADMIN_EMAIL=${SUPERADMIN_EMAIL}
+      - SUPERADMIN_PASSWORD=${SUPERADMIN_PASSWORD}
+      - ASTRACALLS_URL=${ASTRACALLS_URL}
+      - ASTRACALLS_API_KEY=${ASTRACALLS_API_KEY}
+      - PUBLIC_URL=https://${DOMINIO}
+      - GMAPS_URL=http://gmaps:8080
+      - NODE_ENV=production
+    volumes:
+      - uploads:/app/uploads
+    networks: [interna, inoovawebpro]
+    deploy:
+      replicas: 1
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=inoovawebpro
+        - traefik.http.routers.inoovadisparo.rule=Host(`${DOMINIO}`)
+        - traefik.http.routers.inoovadisparo.entrypoints=websecure
+        - traefik.http.routers.inoovadisparo.tls.certresolver=letsencryptresolver
+        - traefik.http.services.inoovadisparo.loadbalancer.server.port=3020
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=disparo
+      - POSTGRES_USER=disparo
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [interna]
+
+  # extrator de leads do Google Maps (open source, MIT): https://github.com/gosom/google-maps-scraper
+  gmaps:
+    image: gosom/google-maps-scraper:v1.18.1
+    command: ["-web", "-data-folder", "/gmapsdata", "-c", "2"]
+    volumes:
+      - gmapsdata:/gmapsdata
+    networks: [interna]
+    deploy:
+      resources:
+        limits: { cpus: '2', memory: 2048M }
+
+volumes:
+  uploads:
+  pgdata:
+  gmapsdata:
+
+networks:
+  interna:
+    driver: overlay
+  inoovawebpro:
+    external: true
