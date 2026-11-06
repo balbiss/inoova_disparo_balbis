@@ -44,6 +44,9 @@ async function tick() {
   rodando = true;
   try {
     await liberarPausasVencidas();
+    // agendadas que chegaram na hora começam sozinhas
+    await db.update(campaigns).set({ status: 'running', startedAt: sql`coalesce(${campaigns.startedAt}, now())`, scheduledAt: null })
+      .where(and(eq(campaigns.status, 'scheduled'), lte(campaigns.scheduledAt, new Date())));
     const ativas = await db.select().from(campaigns).where(eq(campaigns.status, 'running')).orderBy(asc(campaigns.id));
     // por número: as campanhas dele em fila (a mais antiga primeiro); números diferentes andam em paralelo
     const porNumero = new Map<number, Campanha[]>();

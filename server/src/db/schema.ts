@@ -75,7 +75,7 @@ export const contacts = pgTable('contacts', {
 }, t => [uniqueIndex('contacts_tenant_phone_uq').on(t.tenantId, t.phone), index('contacts_category_idx').on(t.categoryId)]);
 
 // kind: message | call
-// status: draft | running | paused | done | canceled
+// status: draft | scheduled | running | paused | done | canceled
 // messageType (kind=message): text | image | video | audio | document
 export const campaigns = pgTable('campaigns', {
   id: serial('id').primaryKey(),
@@ -108,6 +108,8 @@ export const campaigns = pgTable('campaigns', {
   seguranca: jsonb('seguranca').$type<Record<string, unknown>>().notNull().default({}),
   // por que está parada agora mesmo "enviando" (fora do horário, número em pausa, limite do dia…)
   waitReason: text('wait_reason'),
+  // agendamento: status 'scheduled' começa sozinho nessa hora
+  scheduledAt: timestamp('scheduled_at', { withTimezone: true }),
   nextAt: timestamp('next_at', { withTimezone: true }),
   startedAt: timestamp('started_at', { withTimezone: true }),
   finishedAt: timestamp('finished_at', { withTimezone: true }),

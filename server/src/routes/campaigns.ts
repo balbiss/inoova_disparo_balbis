@@ -159,6 +159,7 @@ const criarSchema = z.object({
     contactIds: z.array(z.number().int()).optional(),
   }),
   start: z.boolean().default(false),
+  scheduledAt: z.string().datetime({ offset: true }).nullable().optional(),
 });
 
 campaignsRouter.post('/', async (req, res) => {
@@ -166,6 +167,8 @@ campaignsRouter.post('/', async (req, res) => {
   if (!p.success) return res.status(400).json({ error: p.error.issues[0].message });
   const d = p.data;
   const tid = tenantDe(req);
+  const agendada = d.scheduledAt ? new Date(d.scheduledAt) : null;
+  if (agendada && agendada.getTime() < Date.now() - 60_000) return res.status(400).json({ error: 'A data do agendamento já passou.' });
   // segurança anti-bloqueio: o pedido é ajustado ao piso/teto do admin (o cliente não fura)
   const seg = await efetiva(d.kind, { ...(d.minDelay ? { intervaloMin: d.minDelay } : {}), ...(d.maxDelay ? { intervaloMax: d.maxDelay } : {}), ...d.seguranca } as Partial<Seguranca>);
   if (d.kind === 'call' && seg.preMsgAtivo === false && (d.seguranca as any)?.preMsgAtivo && !seg.preMsgs.length) return res.status(400).json({ error: 'Escreva a mensagem que vai antes da ligação.' });
@@ -213,13 +216,13 @@ campaignsRouter.post('/', async (req, res) => {
   const c = await db.transaction(async tx => {
     const [c] = await tx.insert(campaigns).values({
       tenantId: tid, connectionId: conn.id, createdBy: req.auth!.userId, name: d.name, kind: d.kind,
-      status: d.start ? 'running' : 'draft', messageType, text: d.text,
+      status: agendada ? 'scheduled' : d.start ? 'running' : 'draft', scheduledAt: agendada, messageType, text: d.text,
       textVariants: d.kind === 'call' || messageType === 'audio' ? [] : d.textVariants.filter(v => v.trim()),
       buttons: messageType === 'text' && d.kind === 'message' ? d.buttons : [], optOutButton: messageType === 'text' && d.kind === 'message' && d.optOutButton,
       footer: d.footer, pollOptions: messageType === 'poll' ? d.pollOptions : [], pollMulti: d.pollMulti, typing: d.typing,
       mediaPath: d.media?.path ?? null, mediaName: d.media?.name ?? null, mediaMime: d.media?.mime ?? null,
       callVideo: d.kind === 'call' && d.callVideo, maxRingSeconds: seg.toqueMax, minDelay: seg.intervaloMin, maxDelay: seg.intervaloMax, seguranca: seg,
-      startedAt: d.start ? new Date() : null,
+      startedAt: d.start && !agendada ? new Date() : null,
     }).returning();
     for (let i = 0; i < publico.length; i += 1000) {
       await tx.insert(campaignTargets).values(publico.slice(i, i + 1000).map(x => ({ campaignId: c.id, contactId: x.id, name: x.name, phone: x.phone })));
@@ -233,20 +236,33 @@ campaignsRouter.post('/', async (req, res) => {
 campaignsRouter.post('/:id/start', async (req, res) => {
   const c = await daEmpresa(req);
   if (!c) return res.status(404).json({ error: 'Campanha não encontrada.' });
-  if (!['draft', 'paused'].includes(c.status)) return res.status(400).json({ error: 'Essa campanha não pode ser iniciada agora.' });
+  if (!['draft', 'paused', 'scheduled'].includes(c.status)) return res.status(400).json({ error: 'Essa campanha não pode ser iniciada agora.' });
   const [conn] = c.connectionId ? await db.select().from(connections).where(eq(connections.id, c.connectionId)) : [];
   if (!conn) return res.status(400).json({ error: 'O número de WhatsApp desta campanha foi removido.' });
   const st = await estadoDe(conn.sessionId);
   if (!st?.paired) return res.status(400).json({ error: `O número "${conn.name}" está desconectado. Conecte em Conexões antes de iniciar.` });
   // outra campanha já usando esse número: esta entra na fila (o motor atende uma por vez por número)
-  await db.update(campaigns).set({ status: 'running', pauseReason: null, nextAt: null, startedAt: c.startedAt ?? new Date() }).where(eq(campaigns.id, c.id));
+  await db.update(campaigns).set({ status: 'running', pauseReason: null, nextAt: null, scheduledAt: null, startedAt: c.startedAt ?? new Date() }).where(eq(campaigns.id, c.id));
+  res.json({ ok: true });
+});
+
+// agendar / mudar o horário (rascunho, pausada ou já agendada)
+campaignsRouter.post('/:id/schedule', async (req, res) => {
+  const c = await daEmpresa(req);
+  if (!c) return res.status(404).json({ error: 'Campanha não encontrada.' });
+  if (!['draft', 'paused', 'scheduled'].includes(c.status)) return res.status(400).json({ error: 'Essa campanha não pode ser agendada agora.' });
+  const p = z.object({ scheduledAt: z.string().datetime({ offset: true }) }).safeParse(req.body);
+  if (!p.success) return res.status(400).json({ error: 'Escolha a data e a hora.' });
+  const quando = new Date(p.data.scheduledAt);
+  if (quando.getTime() < Date.now() - 60_000) return res.status(400).json({ error: 'A data do agendamento já passou.' });
+  await db.update(campaigns).set({ status: 'scheduled', scheduledAt: quando, pauseReason: null }).where(eq(campaigns.id, c.id));
   res.json({ ok: true });
 });
 
 campaignsRouter.post('/:id/pause', async (req, res) => {
   const c = await daEmpresa(req);
   if (!c) return res.status(404).json({ error: 'Campanha não encontrada.' });
-  if (c.status !== 'running') return res.status(400).json({ error: 'A campanha não está rodando.' });
+  if (!['running', 'scheduled'].includes(c.status)) return res.status(400).json({ error: 'Só dá pra pausar campanha em andamento ou agendada.' });
   await db.update(campaigns).set({ status: 'paused', pauseReason: 'Pausada por ' + req.auth!.name + '.' }).where(eq(campaigns.id, c.id));
   res.json({ ok: true });
 });
@@ -265,7 +281,7 @@ campaignsRouter.post('/:id/cancel', async (req, res) => {
 campaignsRouter.delete('/:id', async (req, res) => {
   const c = await daEmpresa(req);
   if (!c) return res.status(404).json({ error: 'Campanha não encontrada.' });
-  if (c.status === 'running') return res.status(400).json({ error: 'Pause ou cancele a campanha antes de excluir.' });
+  if (['running', 'scheduled'].includes(c.status)) return res.status(400).json({ error: 'Pause ou cancele a campanha antes de excluir.' });
   await db.delete(campaigns).where(eq(campaigns.id, c.id));
   if (c.mediaPath) {
     const [{ n }] = await db.select({ n: count() }).from(campaigns).where(eq(campaigns.mediaPath, c.mediaPath));

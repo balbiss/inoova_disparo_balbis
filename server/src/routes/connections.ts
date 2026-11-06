@@ -131,7 +131,7 @@ connectionsRouter.delete('/:id', async (req, res) => {
   const c = await daEmpresa(req);
   if (!c) return res.status(404).json({ error: 'Número não encontrado.' });
   const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(campaigns)
-    .where(and(eq(campaigns.connectionId, c.id), inArray(campaigns.status, ['running', 'paused'])));
+    .where(and(eq(campaigns.connectionId, c.id), inArray(campaigns.status, ['running', 'paused', 'scheduled'])));
   if (n > 0) return res.status(400).json({ error: 'Esse número tem campanha em andamento ou pausada. Cancele ou conclua antes de remover.' });
   try {
     await astra('DELETE', `/api/sessions/${encodeURIComponent(c.sessionId)}`, undefined, { clientId: clientIdDe(c.tenantId) });

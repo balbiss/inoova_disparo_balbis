@@ -42,6 +42,25 @@ const det = (await call(A, 'GET', `/campaigns/${c1.j.campaign.id}`)).j.campaign;
 check(det.numero && det.numero.limiteDia === 25 && det.numero.diaAquecimento === 1, 'detalhe da campanha mostra o uso do número (aquecimento)', det.numero);
 check((await call(A, 'POST', `/connections/${conn.id}/reset-warmup`)).s === 200, 'reiniciar aquecimento do número');
 
+console.log('Agendamento');
+const base = { kind: 'message', connectionId: conn.id, messageType: 'text', text: 'Oi', audience: { all: true } };
+check((await call(A, 'POST', '/campaigns', { ...base, name: 'Passado', scheduledAt: new Date(Date.now() - 3600_000).toISOString() })).s === 400, 'não agenda no passado');
+const ag = await call(A, 'POST', '/campaigns', { ...base, name: 'Agendada', scheduledAt: new Date(Date.now() + 86400_000).toISOString() });
+check(ag.s === 201 && ag.j.campaign.status === 'scheduled' && !!ag.j.campaign.scheduledAt, 'cria campanha agendada', ag.j.campaign);
+check((await call(A, 'DELETE', `/campaigns/${ag.j.campaign.id}`)).s === 400, 'não exclui campanha agendada');
+const novaHora = new Date(Date.now() + 2 * 86400_000).toISOString();
+check((await call(A, 'POST', `/campaigns/${ag.j.campaign.id}/schedule`, { scheduledAt: novaHora })).s === 200, 'muda o horário do agendamento');
+check(new Date((await call(A, 'GET', `/campaigns/${ag.j.campaign.id}`)).j.campaign.scheduledAt).toISOString() === novaHora, 'novo horário salvo');
+check((await call(A, 'POST', `/campaigns/${ag.j.campaign.id}/pause`)).s === 200, 'pausa campanha agendada');
+const logo = await call(A, 'POST', '/campaigns', { ...base, name: 'Logo', scheduledAt: new Date(Date.now() + 2000).toISOString() });
+await new Promise(r => setTimeout(r, 6000));
+const lg = (await call(A, 'GET', `/campaigns/${logo.j.campaign.id}`)).j.campaign;
+check(lg.status === 'running' && !!lg.startedAt && !lg.scheduledAt, 'campanha agendada começa sozinha na hora', lg);
+await call(A, 'POST', `/campaigns/${logo.j.campaign.id}/cancel`);
+await call(A, 'POST', `/campaigns/${ag.j.campaign.id}/cancel`);
+const dash = (await call(A, 'GET', '/dashboard')).j;
+check(Array.isArray(dash.ativas), 'painel lista campanhas ativas/agendadas');
+
 console.log('Limpeza');
 await call(S, 'PUT', '/admin/seguranca', { pisoIntervaloMsg: 8, tetoDia: 600 });
 await call(A, 'DELETE', `/campaigns/${c1.j.campaign.id}`);

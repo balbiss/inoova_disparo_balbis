@@ -18,8 +18,8 @@ dashboardRouter.get('/', async (req, res) => {
   const [{ n: totalContatos }] = await db.select({ n: count() }).from(contacts).where(eq(contacts.tenantId, tid));
   const conns = await db.select().from(connections).where(eq(connections.tenantId, tid));
   const estados = await Promise.all(conns.map(c => estadoDe(c.sessionId)));
-  const ativas = await db.select({ id: campaigns.id, name: campaigns.name, kind: campaigns.kind, status: campaigns.status, pauseReason: campaigns.pauseReason })
-    .from(campaigns).where(and(eq(campaigns.tenantId, tid), inArray(campaigns.status, ['running', 'paused'])));
+  const ativas = await db.select({ id: campaigns.id, name: campaigns.name, kind: campaigns.kind, status: campaigns.status, pauseReason: campaigns.pauseReason, waitReason: campaigns.waitReason, scheduledAt: campaigns.scheduledAt })
+    .from(campaigns).where(and(eq(campaigns.tenantId, tid), inArray(campaigns.status, ['running', 'paused', 'scheduled'])));
 
   const doTenant = (cond: any) => db.select({ status: campaignTargets.status, doneAt: campaignTargets.doneAt })
     .from(campaignTargets).innerJoin(campaigns, eq(campaigns.id, campaignTargets.campaignId))
