@@ -6,3 +6,4 @@ server/.devdb/
 server/uploads/
 *.log
 .env
+tests/prints/
