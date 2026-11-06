@@ -3,10 +3,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import multer from 'multer';
-import { and, asc, count, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, isNotNull, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/client.js';
-import { campaigns, campaignTargets, connections, contacts, users } from '../db/schema.js';
+import { campaigns, campaignTargets, connections, contacts, conversations, messages, users } from '../db/schema.js';
 import { exigirEmpresa, exigirLogin, tenantDe } from '../lib/auth.js';
 import { arquivoUpload, UPLOAD_DIR } from '../lib/uploads.js';
 import { estadoDe } from '../lib/astra.js';
@@ -41,8 +41,13 @@ const CONTADORES = {
   pending: sql<number>`count(*) filter (where ${campaignTargets.status} in ('pending','sending','ringing','answered'))::int`,
   sent: sql<number>`count(*) filter (where ${campaignTargets.status} = 'sent')::int`,
   failed: sql<number>`count(*) filter (where ${campaignTargets.status} = 'failed')::int`,
+  skipped: sql<number>`count(*) filter (where ${campaignTargets.status} = 'skipped')::int`,
   completed: sql<number>`count(*) filter (where ${campaignTargets.status} = 'completed')::int`,
   noAnswer: sql<number>`count(*) filter (where ${campaignTargets.status} = 'no-answer')::int`,
+  delivered: sql<number>`count(*) filter (where ${campaignTargets.deliveredAt} is not null)::int`,
+  read: sql<number>`count(*) filter (where ${campaignTargets.readAt} is not null)::int`,
+  replied: sql<number>`count(*) filter (where ${campaignTargets.repliedAt} is not null)::int`,
+  optedOut: sql<number>`count(*) filter (where ${campaignTargets.optedOut})::int`,
 };
 
 async function contadores(ids: number[]) {
@@ -52,7 +57,7 @@ async function contadores(ids: number[]) {
   return new Map(l.map(({ campaignId, ...r }) => [campaignId, r]));
 }
 
-const vazio = { total: 0, pending: 0, sent: 0, failed: 0, completed: 0, noAnswer: 0 };
+const vazio = { total: 0, pending: 0, sent: 0, failed: 0, skipped: 0, completed: 0, noAnswer: 0, delivered: 0, read: 0, replied: 0, optedOut: 0 };
 
 async function daEmpresa(req: any) {
   const [c] = await db.select().from(campaigns).where(and(eq(campaigns.id, Number(req.params.id)), eq(campaigns.tenantId, tenantDe(req))));
@@ -91,11 +96,16 @@ campaignsRouter.get('/:id/targets', async (req, res) => {
   const conds: SQL[] = [eq(campaignTargets.campaignId, c.id)];
   const st = String(req.query.status || '');
   if (st === 'pending') conds.push(inArray(campaignTargets.status, ['pending', 'sending', 'ringing', 'answered']));
+  else if (st === 'replied') conds.push(isNotNull(campaignTargets.repliedAt));
+  else if (st === 'read') conds.push(isNotNull(campaignTargets.readAt));
+  else if (st === 'optedOut') conds.push(eq(campaignTargets.optedOut, true));
   else if (st) conds.push(eq(campaignTargets.status, st));
   const where = and(...conds);
   const [{ total }] = await db.select({ total: count() }).from(campaignTargets).where(where);
-  const l = await db.select().from(campaignTargets).where(where).orderBy(asc(campaignTargets.id)).limit(per).offset((page - 1) * per);
-  res.json({ targets: l.map(({ astraRef: _a, ...t }) => t), total, page, per });
+  const l = await db.select({ t: campaignTargets, conversationId: conversations.id }).from(campaignTargets)
+    .leftJoin(conversations, and(eq(conversations.connectionId, c.connectionId ?? 0), eq(conversations.phone, campaignTargets.phone)))
+    .where(where).orderBy(asc(campaignTargets.id)).limit(per).offset((page - 1) * per);
+  res.json({ targets: l.map(({ t: { astraRef: _a, ...t }, conversationId }) => ({ ...t, conversationId })), total, page, per });
 });
 
 // mídia da campanha (pra pré-visualizar na tela)
@@ -110,8 +120,20 @@ const criarSchema = z.object({
   name: z.string().trim().min(2, 'Dê um nome à campanha.').max(120),
   kind: z.enum(['message', 'call']),
   connectionId: z.number().int(),
-  messageType: z.enum(['text', 'image', 'video', 'audio', 'document']).default('text'),
+  messageType: z.enum(['text', 'image', 'video', 'audio', 'document', 'poll']).default('text'),
   text: z.string().max(4096).default(''),
+  textVariants: z.array(z.string().max(4096)).max(10, 'No máximo 10 versões extras.').default([]),
+  buttons: z.array(z.object({
+    type: z.enum(['quick_reply', 'cta_url', 'cta_call', 'cta_copy']),
+    text: z.string().trim().min(1, 'Todo botão precisa de um texto.').max(25, 'Texto do botão: até 25 letras.'),
+    value: z.string().trim().max(300).optional(),
+  })).max(3).default([]),
+  optOutButton: z.boolean().default(false),
+  footer: z.string().max(60).default(''),
+  pollOptions: z.array(z.string().trim().min(1).max(100)).max(12).default([]),
+  pollMulti: z.boolean().default(false),
+  typing: z.boolean().default(true),
+  skipInvalid: z.boolean().default(true),
   media: z.object({ path: z.string(), name: z.string(), mime: z.string() }).nullable().optional(),
   callVideo: z.boolean().default(false),
   maxRingSeconds: z.number().int().min(15).max(90).default(40),
@@ -144,6 +166,15 @@ campaignsRouter.post('/', async (req, res) => {
     messageType = d.callVideo ? 'video' : 'audio';
   } else if (messageType === 'text') {
     if (!d.text.trim()) return res.status(400).json({ error: 'Escreva a mensagem.' });
+    if (d.buttons.length + (d.optOutButton ? 1 : 0) > 3) return res.status(400).json({ error: 'No máximo 3 botões (contando o "Não tenho interesse").' });
+    for (const b of d.buttons) {
+      if (b.type === 'cta_url' && !/^https?:\/\/\S+\.\S+/.test(b.value || '')) return res.status(400).json({ error: `O botão "${b.text}" precisa de um link começando com https://` });
+      if (b.type === 'cta_call' && (b.value || '').replace(/\D/g, '').length < 10) return res.status(400).json({ error: `O botão "${b.text}" precisa de um telefone com DDD.` });
+      if (b.type === 'cta_copy' && !b.value) return res.status(400).json({ error: `O botão "${b.text}" precisa do código a copiar.` });
+    }
+  } else if (messageType === 'poll') {
+    if (!d.text.trim()) return res.status(400).json({ error: 'Escreva a pergunta da enquete.' });
+    if (d.pollOptions.length < 2) return res.status(400).json({ error: 'A enquete precisa de pelo menos 2 opções.' });
   } else {
     if (!d.media) return res.status(400).json({ error: 'Envie o arquivo da mensagem.' });
     const prefixo = { image: 'image/', video: 'video/', audio: 'audio/', document: '' }[messageType];
@@ -157,13 +188,20 @@ campaignsRouter.post('/', async (req, res) => {
   else if (d.audience.categoryIds?.length) where = and(eq(contacts.tenantId, tid), inArray(contacts.categoryId, d.audience.categoryIds));
   else if (d.audience.all) where = eq(contacts.tenantId, tid);
   if (!where) return res.status(400).json({ error: 'Escolha pra quem enviar.' });
-  const publico = await db.select({ id: contacts.id, name: contacts.name, phone: contacts.phone }).from(contacts).where(where).orderBy(asc(contacts.id));
-  if (!publico.length) return res.status(400).json({ error: 'Nenhum contato nesse público.' });
+  const todos = await db.select({ id: contacts.id, name: contacts.name, phone: contacts.phone, optOut: contacts.optOut, waStatus: contacts.waStatus }).from(contacts).where(where).orderBy(asc(contacts.id));
+  // quem pediu pra sair nunca entra; sem WhatsApp (validado) fica de fora se a opção estiver ligada
+  const descadastrados = todos.filter(x => x.optOut).length;
+  const semWhats = d.skipInvalid ? todos.filter(x => !x.optOut && x.waStatus === 'invalid').length : 0;
+  const publico = todos.filter(x => !x.optOut && !(d.skipInvalid && x.waStatus === 'invalid'));
+  if (!publico.length) return res.status(400).json({ error: todos.length ? 'Todos os contatos desse público se descadastraram ou não têm WhatsApp.' : 'Nenhum contato nesse público.' });
 
   const c = await db.transaction(async tx => {
     const [c] = await tx.insert(campaigns).values({
       tenantId: tid, connectionId: conn.id, createdBy: req.auth!.userId, name: d.name, kind: d.kind,
       status: d.start ? 'running' : 'draft', messageType, text: d.text,
+      textVariants: d.kind === 'call' || messageType === 'audio' ? [] : d.textVariants.filter(v => v.trim()),
+      buttons: messageType === 'text' && d.kind === 'message' ? d.buttons : [], optOutButton: messageType === 'text' && d.kind === 'message' && d.optOutButton,
+      footer: d.footer, pollOptions: messageType === 'poll' ? d.pollOptions : [], pollMulti: d.pollMulti, typing: d.typing,
       mediaPath: d.media?.path ?? null, mediaName: d.media?.name ?? null, mediaMime: d.media?.mime ?? null,
       callVideo: d.kind === 'call' && d.callVideo, maxRingSeconds: d.maxRingSeconds, minDelay: d.minDelay, maxDelay: d.maxDelay,
       startedAt: d.start ? new Date() : null,
@@ -173,7 +211,7 @@ campaignsRouter.post('/', async (req, res) => {
     }
     return c;
   });
-  res.status(201).json({ campaign: publica(c), total: publico.length });
+  res.status(201).json({ campaign: publica(c), total: publico.length, excluded: { optOut: descadastrados, noWhatsapp: semWhats } });
 });
 
 // --- controle -----------------------------------------------------------------------------------
@@ -216,7 +254,8 @@ campaignsRouter.delete('/:id', async (req, res) => {
   await db.delete(campaigns).where(eq(campaigns.id, c.id));
   if (c.mediaPath) {
     const [{ n }] = await db.select({ n: count() }).from(campaigns).where(eq(campaigns.mediaPath, c.mediaPath));
-    if (n === 0) fs.rm(arquivoUpload(c.mediaPath), { force: true }, () => {});
+    const [{ m }] = await db.select({ m: count() }).from(messages).where(eq(messages.mediaPath, c.mediaPath));
+    if (n === 0 && m === 0) fs.rm(arquivoUpload(c.mediaPath), { force: true }, () => {});
   }
   res.json({ ok: true });
 });
@@ -226,11 +265,12 @@ campaignsRouter.get('/:id/export', async (req, res) => {
   const c = await daEmpresa(req);
   if (!c) return res.status(404).json({ error: 'Campanha não encontrada.' });
   const l = await db.select().from(campaignTargets).where(eq(campaignTargets.campaignId, c.id)).orderBy(asc(campaignTargets.id));
-  const ROTULO: Record<string, string> = { pending: 'Na fila', sending: 'Enviando', sent: 'Enviada', failed: 'Falhou', ringing: 'Chamando', answered: 'Em ligação', completed: 'Atendeu', 'no-answer': 'Não atendeu' };
+  const ROTULO: Record<string, string> = { pending: 'Na fila', sending: 'Enviando', sent: 'Enviada', failed: 'Falhou', skipped: 'Pulado (descadastrado)', ringing: 'Chamando', answered: 'Em ligação', completed: 'Atendeu', 'no-answer': 'Não atendeu' };
   const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const fmt = (d: Date | null) => (d ? d.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '');
-  const linhas = [['Nome', 'Telefone', 'Situação', 'Duração (s)', 'Quando', 'Erro'].map(esc).join(';')]
-    .concat(l.map(t => [t.name, t.phone, ROTULO[t.status] || t.status, t.durationMs ? Math.round(t.durationMs / 1000) : '', fmt(t.doneAt), t.error || ''].map(esc).join(';')));
+  const linhas = [['Nome', 'Telefone', 'Situação', 'Duração (s)', 'Quando', 'Entregue', 'Lida', 'Respondeu', 'Resposta', 'Descadastrou', 'Erro'].map(esc).join(';')]
+    .concat(l.map(t => [t.name, t.phone, ROTULO[t.status] || t.status, t.durationMs ? Math.round(t.durationMs / 1000) : '', fmt(t.doneAt),
+      fmt(t.deliveredAt), fmt(t.readAt), fmt(t.repliedAt), t.reply || '', t.optedOut ? 'Sim' : '', t.error || ''].map(esc).join(';')));
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="campanha-${c.id}.csv"`);
   res.send('﻿' + linhas.join('\r\n'));

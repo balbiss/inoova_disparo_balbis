@@ -5,6 +5,7 @@ import { db } from '../db/client.js';
 import { campaigns, connections, tenants } from '../db/schema.js';
 import { exigirEmpresa, exigirLogin, tenantDe } from '../lib/auth.js';
 import { astra, AstraErro, clientIdDe, estadoDe, numeroDoJid } from '../lib/astra.js';
+import { atualizarSaude, garantirWebhook } from '../lib/saude.js';
 
 // Números de WhatsApp da empresa (cada um = uma sessão no AstraCalls).
 export const connectionsRouter = Router();
@@ -24,8 +25,21 @@ async function comEstado(c: typeof connections.$inferSelect) {
   const st = await estadoDe(c.sessionId);
   const phone = numeroDoJid(st?.jid) || c.phone;
   if (st?.paired && phone && phone !== c.phone) await db.update(connections).set({ phone }).where(eq(connections.id, c.id));
-  return { id: c.id, name: c.name, phone, connected: !!st?.paired, state: st?.state || 'desconhecido', createdAt: c.createdAt };
+  const restricao = c.restrictionActive && (!c.restrictionEndsAt || c.restrictionEndsAt > new Date());
+  return {
+    id: c.id, name: c.name, phone, connected: !!st?.paired, state: st?.state || 'desconhecido', createdAt: c.createdAt,
+    health: { restriction: restricao, restrictionEndsAt: restricao ? c.restrictionEndsAt : null, capping: c.cappingStatus, cappingRemaining: c.cappingRemaining, cappingTotal: c.cappingTotal, at: c.healthAt },
+  };
 }
+
+// consulta a saúde do número agora (restrição e limite de conversas novas)
+connectionsRouter.post('/:id/health', async (req, res) => {
+  const c = await daEmpresa(req);
+  if (!c) return res.status(404).json({ error: 'Número não encontrado.' });
+  await atualizarSaude(c, true);
+  const [novo] = await db.select().from(connections).where(eq(connections.id, c.id));
+  res.json({ connection: await comEstado(novo) });
+});
 
 connectionsRouter.get('/', async (req, res) => {
   const l = await db.select().from(connections).where(eq(connections.tenantId, tenantDe(req))).orderBy(connections.id);
@@ -42,6 +56,7 @@ connectionsRouter.post('/', async (req, res) => {
   try {
     const s = await astra<{ id: string }>('POST', '/api/sessions', { name: `${t.name} · ${p.data.name}`.slice(0, 80) }, { clientId: clientIdDe(tid) });
     const [c] = await db.insert(connections).values({ tenantId: tid, name: p.data.name, sessionId: s.id }).returning();
+    garantirWebhook(c).catch(e => console.warn('[conexao] webhook', (e as Error).message));
     res.status(201).json({ connection: await comEstado(c) });
   } catch (e) { erroAstra(res, e) }
 });

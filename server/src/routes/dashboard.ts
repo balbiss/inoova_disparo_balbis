@@ -1,7 +1,7 @@
 import { Router } from 'express';
-import { and, count, eq, gte, inArray } from 'drizzle-orm';
+import { and, count, eq, gt, gte, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { campaigns, campaignTargets, connections, contacts } from '../db/schema.js';
+import { campaigns, campaignTargets, connections, contacts, conversations } from '../db/schema.js';
 import { exigirEmpresa, exigirLogin, tenantDe } from '../lib/auth.js';
 import { estadoDe } from '../lib/astra.js';
 
@@ -46,8 +46,14 @@ dashboardRouter.get('/', async (req, res) => {
     }
   }
 
+  const [{ n: respostasHoje }] = await db.select({ n: count() }).from(conversations)
+    .where(and(eq(conversations.tenantId, tid), gte(conversations.lastInboundAt, hoje)));
+  const [{ n: naoLidas }] = await db.select({ n: count() }).from(conversations)
+    .where(and(eq(conversations.tenantId, tid), gt(conversations.unread, 0)));
+
   res.json({
     contatos: totalContatos,
+    respostasHoje, naoLidas,
     conexoes: { total: conns.length, conectadas: estados.filter(e => e?.paired).length },
     hoje: { enviadas: enviadasHoje, atendidas: atendidasHoje, falhas: falhasHoje },
     ativas,

@@ -13,10 +13,15 @@ import { campaignsRouter } from './routes/campaigns.js';
 import { dashboardRouter } from './routes/dashboard.js';
 import { iniciarEventosAstra } from './lib/astra.js';
 import { iniciarWorker } from './lib/worker.js';
+import { iniciarSaude } from './lib/saude.js';
+import { webhooksRouter } from './routes/webhooks.js';
+import { conversationsRouter } from './routes/conversations.js';
 
 const app = express();
 app.set('trust proxy', 1);
 app.use(cors({ origin: (process.env.CORS_ORIGIN || '').split(',').filter(Boolean).length ? process.env.CORS_ORIGIN!.split(',') : true }));
+// webhook do AstraCalls antes do express.json: a assinatura é conferida sobre o corpo cru
+app.use('/api/webhooks', webhooksRouter);
 app.use(express.json({ limit: '20mb' }));
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
@@ -27,6 +32,12 @@ app.use('/api/connections', connectionsRouter);
 app.use('/api/contacts', contactsRouter);
 app.use('/api/campaigns', campaignsRouter);
 app.use('/api/dashboard', dashboardRouter);
+app.use('/api/conversations', conversationsRouter);
+if (process.env.ENABLE_TEST_ROUTES === '1' && process.env.NODE_ENV !== 'production') {
+  const { testesRouter } = await import('./routes/testes.js');
+  app.use('/api/_test', testesRouter);
+  console.warn('[api] rotas de TESTE ligadas (/api/_test) — nunca use em produção');
+}
 
 // em produção o mesmo container serve o painel (pasta web/ com o build do Vite)
 const web = path.resolve(process.env.WEB_DIR || './web');
@@ -54,6 +65,7 @@ async function iniciar() {
   }
   iniciarEventosAstra();
   iniciarWorker();
+  iniciarSaude();
   app.listen(PORT, () => console.log(`[api] ouvindo na porta ${PORT}`));
 }
 void iniciar();

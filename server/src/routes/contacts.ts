@@ -5,6 +5,7 @@ import { db } from '../db/client.js';
 import { categories, contacts, tenants } from '../db/schema.js';
 import { exigirEmpresa, exigirLogin, tenantDe } from '../lib/auth.js';
 import { normalizarTelefone } from '../lib/telefone.js';
+import { iniciarValidacao, pararValidacao, progressoDe } from '../lib/validacao.js';
 
 export const contactsRouter = Router();
 contactsRouter.use(exigirLogin, exigirEmpresa);
@@ -42,7 +43,7 @@ contactsRouter.delete('/categories/:id', async (req, res) => {
 
 // --- contatos -----------------------------------------------------------------------------------
 /** Filtro comum da lista e da seleção de público: busca + categoria ('none' = sem categoria). */
-export function filtroContatos(tenantId: number, q?: string, category?: string): SQL {
+export function filtroContatos(tenantId: number, q?: string, category?: string, situacao?: string): SQL {
   const conds: SQL[] = [eq(contacts.tenantId, tenantId)];
   const termo = (q || '').trim();
   if (termo) {
@@ -51,15 +52,18 @@ export function filtroContatos(tenantId: number, q?: string, category?: string):
   }
   if (category === 'none') conds.push(isNull(contacts.categoryId));
   else if (category && /^\d+$/.test(category)) conds.push(eq(contacts.categoryId, Number(category)));
+  // situação: descadastrados, sem WhatsApp, com WhatsApp, não validados
+  if (situacao === 'optout') conds.push(eq(contacts.optOut, true));
+  else if (situacao === 'invalid' || situacao === 'valid' || situacao === 'unknown') conds.push(eq(contacts.waStatus, situacao));
   return and(...conds)!;
 }
 
 contactsRouter.get('/', async (req, res) => {
   const page = Math.max(1, Number(req.query.page) || 1);
   const per = Math.min(200, Math.max(10, Number(req.query.per) || 50));
-  const where = filtroContatos(tenantDe(req), String(req.query.q || ''), String(req.query.category || ''));
+  const where = filtroContatos(tenantDe(req), String(req.query.q || ''), String(req.query.category || ''), String(req.query.situacao || ''));
   const [{ total }] = await db.select({ total: count() }).from(contacts).where(where);
-  const l = await db.select({ id: contacts.id, name: contacts.name, phone: contacts.phone, categoryId: contacts.categoryId, createdAt: contacts.createdAt })
+  const l = await db.select({ id: contacts.id, name: contacts.name, phone: contacts.phone, categoryId: contacts.categoryId, optOut: contacts.optOut, waStatus: contacts.waStatus, createdAt: contacts.createdAt })
     .from(contacts).where(where).orderBy(desc(contacts.id)).limit(per).offset((page - 1) * per);
   res.json({ contacts: l, total, page, per });
 });
@@ -76,7 +80,7 @@ async function categoriaValida(tenantId: number, id: number | null | undefined) 
   return !!c;
 }
 
-const contatoSchema = z.object({ name: z.string().trim().max(120).default(''), phone: z.string(), categoryId: z.number().int().nullable().optional() });
+const contatoSchema = z.object({ name: z.string().trim().max(120).default(''), phone: z.string(), categoryId: z.number().int().nullable().optional(), optOut: z.boolean().optional() });
 
 contactsRouter.post('/', async (req, res) => {
   const p = contatoSchema.safeParse(req.body);
@@ -107,6 +111,8 @@ contactsRouter.patch('/:id', async (req, res) => {
     if (!(await categoriaValida(tid, p.data.categoryId))) return res.status(400).json({ error: 'Categoria inválida.' });
     set.categoryId = p.data.categoryId;
   }
+  if (p.data.optOut !== undefined) { set.optOut = p.data.optOut; set.optOutAt = p.data.optOut ? new Date() : null }
+  if (set.phone) { set.waStatus = 'unknown'; set.waCheckedAt = null }
   try {
     const [c] = await db.update(contacts).set(set).where(and(eq(contacts.id, Number(req.params.id)), eq(contacts.tenantId, tid))).returning();
     if (!c) return res.status(404).json({ error: 'Contato não encontrado.' });
@@ -121,7 +127,7 @@ contactsRouter.post('/delete', async (req, res) => {
   const tid = tenantDe(req);
   const b = req.body || {};
   let r;
-  if (b.all === true) r = await db.delete(contacts).where(filtroContatos(tid, b.q, b.category)).returning({ id: contacts.id });
+  if (b.all === true) r = await db.delete(contacts).where(filtroContatos(tid, b.q, b.category, b.situacao)).returning({ id: contacts.id });
   else {
     const ids = (Array.isArray(b.ids) ? b.ids : []).map(Number).filter(Number.isInteger);
     if (!ids.length) return res.status(400).json({ error: 'Nenhum contato selecionado.' });
@@ -172,4 +178,27 @@ contactsRouter.post('/import', async (req, res) => {
     });
   }
   res.json({ created: novos.length, updated: validos.length - novos.length, invalid: invalidos, duplicatedInFile: p.data.rows.length - invalidos - validos.length });
+});
+
+// --- validação no WhatsApp ----------------------------------------------------------------------
+contactsRouter.post('/validate', async (req, res) => {
+  const b = req.body || {};
+  try {
+    const p = await iniciarValidacao(tenantDe(req), filtroContatos(tenantDe(req), b.q, b.category, b.situacao), !!b.refazer);
+    res.json({ progress: p });
+  } catch (e) { res.status(400).json({ error: (e as Error).message }) }
+});
+contactsRouter.get('/validate', (req, res) => { res.json({ progress: progressoDe(tenantDe(req)) }) });
+contactsRouter.post('/validate/stop', (req, res) => { pararValidacao(tenantDe(req)); res.json({ ok: true }) });
+
+// resumo pra tela: quantos descadastrados / sem WhatsApp / não validados
+contactsRouter.get('/summary', async (req, res) => {
+  const [r] = await db.select({
+    total: sql<number>`count(*)::int`,
+    optOut: sql<number>`count(*) filter (where ${contacts.optOut})::int`,
+    invalid: sql<number>`count(*) filter (where ${contacts.waStatus} = 'invalid')::int`,
+    valid: sql<number>`count(*) filter (where ${contacts.waStatus} = 'valid')::int`,
+    unknown: sql<number>`count(*) filter (where ${contacts.waStatus} = 'unknown')::int`,
+  }).from(contacts).where(eq(contacts.tenantId, tenantDe(req)));
+  res.json(r);
 });
