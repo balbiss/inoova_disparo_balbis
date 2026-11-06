@@ -77,7 +77,7 @@ export async function guardarResultado(searchId: number, csv: string) {
     const phone = raw ? normalizarTelefone(raw.startsWith('+') ? raw : raw.replace(/^0+/, '')) : null;
     return {
       searchId, name: (r.title || '').slice(0, 200), phone, phoneRaw: raw || null, mobile: ehCelular(phone),
-      category: (r.category || '').slice(0, 120), address: (r.complete_address || r.address || '').slice(0, 300),
+      category: (r.category || '').slice(0, 120), address: textoEndereco(r.complete_address, r.address).slice(0, 300),
       website: (r.website || '').slice(0, 300), emails: (r.emails || '').slice(0, 500),
       rating: r.review_rating || null, reviewCount: Number(r.review_count) || null, link: (r.link || '').slice(0, 500),
     };
@@ -131,3 +131,18 @@ export function iniciarExtrator() {
 
 export const leadsDaBusca = (searchId: number, ids?: number[]) =>
   db.select().from(leads).where(ids?.length ? and(eq(leads.searchId, searchId), inArray(leads.id, ids)) : eq(leads.searchId, searchId));
+
+/** O gosom manda complete_address como JSON ({street, borough, city, state…}); vira texto legível. */
+export function textoEndereco(completo?: string, simples?: string): string {
+  const c = (completo || '').trim();
+  if (c.startsWith('{')) {
+    try {
+      const j = JSON.parse(c) as Record<string, string>;
+      const cidade = [j.city, j.state].filter(Boolean).join(' - ');
+      const t = [j.street, j.borough, cidade].filter(Boolean).join(', ');
+      if (t) return t;
+    } catch { /* cai no simples */ }
+    return (simples || '').trim();
+  }
+  return c || (simples || '').trim();
+}
